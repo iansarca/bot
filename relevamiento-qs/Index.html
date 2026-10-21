@@ -1,0 +1,999 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: herramienta de una columna; el árbol de menús de QS como lista plegable, con chips de frecuencia por pantalla */
+:root {
+  --bg: #eef1f5;
+  --surface: #ffffff;
+  --surface-2: #f6f8fb;
+  --fg: #18212e;
+  --muted: #5a6677;
+  --line: #d9e0e9;
+  --accent: #2550b8;
+  --accent-soft: #e3eafa;
+  --f-d: #1f48ad;
+  --f-s: #4d78dc;
+  --f-m: #97b2ec;
+  --f-r: #c4cedd;
+  --warn-bg: #fff5dc;
+  --warn-fg: #6b4b00;
+  --ok: #1d7a4c;
+  --danger: #b3261e;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-menu: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --font-num: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #11161e; --surface: #18202b; --surface-2: #1d2633; --fg: #e4e9f1; --muted: #98a4b5;
+    --line: #2b3646; --accent: #8fb0ff; --accent-soft: #22314d;
+    --f-d: #8fb0ff; --f-s: #5f86e0; --f-m: #3d5a9c; --f-r: #3a4556;
+    --warn-bg: #3a2f12; --warn-fg: #f3d58a; --ok: #6fd3a0; --danger: #ff8a80; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #11161e; --surface: #18202b; --surface-2: #1d2633; --fg: #e4e9f1; --muted: #98a4b5;
+  --line: #2b3646; --accent: #8fb0ff; --accent-soft: #22314d;
+  --f-d: #8fb0ff; --f-s: #5f86e0; --f-m: #3d5a9c; --f-r: #3a4556;
+  --warn-bg: #3a2f12; --warn-fg: #f3d58a; --ok: #6fd3a0; --danger: #ff8a80; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 15px; line-height: 1.5;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 24px 64px;
+}
+.wrap { max-width: 920px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+header { display: flex; flex-direction: column; gap: 6px; }
+.eyebrow { font-family: var(--font-num); font-size: 12px; color: var(--muted); letter-spacing: .02em; }
+h1 { font-family: var(--font-menu); font-weight: 700; font-size: 30px; line-height: 1.15; margin: 0; text-wrap: balance; }
+.lede { margin: 0; color: var(--muted); max-width: 65ch; }
+.notice { background: var(--warn-bg); color: var(--warn-fg); border-radius: 6px; padding: 10px 14px; font-size: 14px; }
+
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); }
+.tab {
+  font: 600 14px var(--font-menu); letter-spacing: .04em; text-transform: uppercase; color: var(--muted);
+  background: none; border: 0; border-bottom: 2px solid transparent; padding: 10px 14px; cursor: pointer; margin-bottom: -1px;
+}
+.tab[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
+.tab:focus-visible, button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+
+.me { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px; }
+.me .full { grid-column: 1 / -1; }
+label.fld { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); min-width: 0; }
+select, input[type="search"], textarea {
+  font: 15px var(--font-body); color: var(--fg); background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; width: 100%;
+}
+textarea { min-height: 64px; resize: vertical; }
+.who-sub { font-size: 12px; color: var(--muted); }
+input[type="text"] { font: 15px var(--font-body); color: var(--fg); background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; width: 100%; }
+.inline { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
+.inline .fld { flex: 1 1 260px; }
+.btn { font: 600 14px var(--font-body); border: 1px solid var(--line); background: var(--surface); color: var(--fg); border-radius: 6px; padding: 8px 14px; cursor: pointer; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--surface); }
+.btn.danger { color: var(--danger); border-color: var(--danger); }
+.btn.danger.armed { background: var(--danger); color: var(--surface); }
+.person em { font-style: normal; color: var(--muted); }
+.save-state { font-family: var(--font-num); font-size: 12px; color: var(--muted); }
+.save-state.ok { color: var(--ok); }
+
+.legend { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 13px; color: var(--muted); align-items: center; }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+
+.toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+.toolbar input[type="search"] { flex: 1 1 240px; }
+.check { display: flex; gap: 6px; align-items: center; font-size: 14px; color: var(--muted); }
+
+.menu { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.menu > summary {
+  list-style: none; cursor: pointer; display: flex; gap: 12px; align-items: baseline; padding: 12px 16px;
+  font: 700 16px var(--font-menu); letter-spacing: .04em; text-transform: uppercase;
+}
+.menu > summary::-webkit-details-marker { display: none; }
+.menu > summary::before { content: "▸"; color: var(--muted); font-size: 12px; transition: transform .15s; }
+.menu[open] > summary::before { transform: rotate(90deg); }
+.menu > summary .count { margin-left: auto; font: 500 12px var(--font-num); color: var(--muted); letter-spacing: 0; text-transform: none; white-space: nowrap; }
+.menu > summary .count b { color: var(--accent); font-weight: 500; }
+.menu-body { border-top: 1px solid var(--line); }
+.group-h {
+  font: 600 12px var(--font-menu); letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+  padding: 10px 16px 4px; background: var(--surface-2); border-top: 1px solid var(--line);
+}
+.menu-body > .group-h:first-child { border-top: 0; }
+.row { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; padding: 7px 16px; border-top: 1px solid var(--line); }
+.group-h + .row { border-top: 0; }
+.row .lbl { flex: 1 1 220px; min-width: 0; font-family: var(--font-menu); font-weight: 500; font-size: 14px; letter-spacing: .02em; }
+.row .lbl small { display: block; font-family: var(--font-body); font-size: 12px; color: var(--muted); letter-spacing: 0; }
+.row.on .lbl { color: var(--accent); }
+.chips { display: flex; gap: 4px; flex-wrap: wrap; }
+.chip {
+  font: 500 12px var(--font-body); border: 1px solid var(--line); background: var(--surface); color: var(--muted);
+  border-radius: 999px; padding: 3px 10px; cursor: pointer; min-width: 64px;
+}
+.chip:hover { border-color: var(--accent); color: var(--fg); }
+.chip[aria-pressed="true"] { color: #fff; border-color: transparent; }
+.chip[data-f="d"][aria-pressed="true"] { background: var(--f-d); }
+.chip[data-f="s"][aria-pressed="true"] { background: var(--f-s); }
+.chip[data-f="m"][aria-pressed="true"] { background: var(--f-m); color: var(--fg); }
+.chip[data-f="r"][aria-pressed="true"] { background: var(--f-r); color: var(--fg); }
+:root[data-theme="dark"] .chip[data-f="d"][aria-pressed="true"] { color: #10182a; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .chip[data-f="d"][aria-pressed="true"] { color: #10182a; } }
+.chip:disabled { cursor: default; opacity: .6; }
+.empty-filter { padding: 24px; text-align: center; color: var(--muted); }
+
+.tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.tile { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; display: flex; flex-direction: column; gap: 2px; }
+.tile .n { font: 500 28px var(--font-num); font-variant-numeric: tabular-nums; }
+.tile .t { font-size: 13px; color: var(--muted); }
+.res-menu .bar { height: 6px; background: var(--surface-2); border-radius: 3px; overflow: hidden; margin: 0 16px 10px; }
+.res-menu .bar span { display: block; height: 100%; background: var(--accent); }
+.res-row { display: grid; grid-template-columns: minmax(0, 1fr) 150px; gap: 4px 14px; padding: 9px 16px; border-top: 1px solid var(--line); align-items: center; }
+.res-row .lbl { font-family: var(--font-menu); font-weight: 500; font-size: 14px; letter-spacing: .02em; min-width: 0; }
+.res-row .lbl small { display: block; font-family: var(--font-body); font-size: 12px; color: var(--muted); letter-spacing: 0; }
+.res-row .people { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px; }
+.person { font-size: 12px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; color: var(--muted); }
+.person i { font-style: normal; color: var(--fg); }
+.stack { display: flex; height: 14px; border-radius: 3px; overflow: hidden; background: var(--surface-2); }
+.stack span { display: block; height: 100%; }
+.stack-n { font: 12px var(--font-num); color: var(--muted); text-align: right; margin-top: 2px; }
+.unused > summary { cursor: pointer; padding: 10px 16px; font-size: 13px; color: var(--muted); border-top: 1px solid var(--line); }
+.unused ul { margin: 0; padding: 0 16px 12px 34px; columns: 2 240px; font-size: 13px; color: var(--muted); }
+.notes { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 4px 0; }
+.notes h3, .res-h { font: 700 16px var(--font-menu); letter-spacing: .04em; text-transform: uppercase; margin: 0; padding: 10px 16px; }
+.note { padding: 8px 16px; border-top: 1px solid var(--line); font-size: 14px; white-space: pre-wrap; }
+.note b { font-weight: 600; }
+.placeholder { background: var(--surface); border: 1px dashed var(--line); border-radius: 8px; padding: 28px 20px; text-align: center; color: var(--muted); }
+
+@media (max-width: 560px) {
+  .me { grid-template-columns: 1fr; }
+  .tiles { grid-template-columns: 1fr; }
+  .res-row { grid-template-columns: minmax(0, 1fr); }
+  .chip { min-width: 0; }
+  h1 { font-size: 26px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Sistema Integrado de Gestión · Versión 10.26.6.7 · JS Medicina Electrónica S.R.L.</div>
+    <h1>Relevamiento de uso de Quality Soft</h1>
+    <p class="lede">Marcá las pantallas que usás y con qué frecuencia. Lo que no marques cuenta como “no la uso”. Se guarda solo, y podés volver a entrar y editarlo cuando quieras. Con esto vamos a decidir qué partes del sistema recrear primero.</p>
+  </header>
+
+  <div id="notice" class="notice" hidden></div>
+
+  <div class="tabs" role="tablist">
+    <button class="tab" role="tab" id="tab-form" aria-selected="true" aria-controls="view-form">Mi respuesta</button>
+    <button class="tab" role="tab" id="tab-res" aria-selected="false" aria-controls="view-res">Resultados</button>
+  </div>
+
+  <section id="view-form" role="tabpanel" aria-labelledby="tab-form" style="display:flex;flex-direction:column;gap:16px">
+    <div class="me">
+      <label class="fld" for="nombre">Tu nombre
+        <input type="text" id="nombre" maxlength="80" autocomplete="name">
+        <span class="who-sub" id="who">Cargando…</span>
+      </label>
+      <label class="fld" for="area">Tu área
+        <select id="area">
+          <option value="">Elegí tu área…</option>
+          <option>Administración</option>
+          <option>Contabilidad</option>
+          <option>Ventas / Comercial</option>
+          <option>Compras</option>
+          <option>Producción</option>
+          <option>Depósito / Logística</option>
+          <option>Servicio técnico</option>
+          <option>Calidad</option>
+          <option>Gerencia</option>
+          <option>Otra</option>
+        </select>
+      </label>
+      <label class="fld full" for="notas">¿Hay algo que hacés por fuera del sistema (Excel, papel, mails) porque Quality Soft no lo resuelve?
+        <textarea id="notas" placeholder="Ej.: la hoja de ruta de entregas la armo en Excel"></textarea>
+      </label>
+      <div class="full" style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center">
+        <div class="legend">
+          <span><span class="sw" style="background:var(--f-d)"></span>Diario</span>
+          <span><span class="sw" style="background:var(--f-s)"></span>Semanal</span>
+          <span><span class="sw" style="background:var(--f-m)"></span>Mensual</span>
+          <span><span class="sw" style="background:var(--f-r)"></span>Rara vez</span>
+        </div>
+        <span class="save-state" id="save-state"></span>
+      </div>
+    </div>
+
+    <div class="toolbar">
+      <input type="search" id="q" placeholder="Buscar pantalla… (ej.: remito, cuenta corriente)" aria-label="Buscar pantalla">
+      <label class="check" for="only"><input type="checkbox" id="only"> Solo las que marqué</label>
+    </div>
+
+    <div id="tree" style="display:flex;flex-direction:column;gap:10px"></div>
+  </section>
+
+  <section id="view-res" role="tabpanel" aria-labelledby="tab-res" hidden style="flex-direction:column;gap:16px">
+    <div class="toolbar">
+      <label class="fld" for="res-area" style="flex:0 1 260px">Filtrar por área
+        <select id="res-area"><option value="">Todas las áreas</option></select>
+      </label>
+      <button type="button" class="btn" id="refresh">Actualizar</button>
+    </div>
+    <div id="results" style="display:flex;flex-direction:column;gap:12px"></div>
+  </section>
+</div>
+
+<script>
+// Árbol de menús tal como aparece en Quality Soft. Indentación de 2 espacios = un nivel.
+// Una línea que tiene hijos es un submenú; las demás son pantallas.
+const TREE_TXT = `
+CONTABILIDAD GENERAL
+  Altas y actualizaciones
+    Alta de empresa contable
+    Alta de ejercicios contables
+    Habilitación de períodos de carga
+    Carga plan de cuentas
+    Alta de tipos de C. costos
+    Numerador de asientos
+    Conjunto de empresas
+  Emisión de libros y listados
+    Balance general
+    Balance de sumas y saldos
+    Libro diario general
+    Libro mayor general
+    Conjunto de empresas
+    Consulta de balance de saldos
+  Operaciones cierre y apertura
+    Carga manual asiento apertura
+    Asignación cuentas resultado
+    Asiento refundición ctas. result.
+    Asiento de cierre del ejercicio
+    Transferidor asiento de cierre
+    Transferidor archivos ejercicios
+    Transferidor movimientos fondos
+    Transferidor movimientos cartera
+  Sub-sistema de fondos
+    Altas/modif. códigos movimiento
+    Altas/modif. tipos de planilla
+    Carga de movimientos planillas
+    Saldo inicial tipo planilla
+    Consulta planillas fecha ingreso
+    Consulta planillas fecha acredit.
+    Consulta de saldos
+    Mayor planillas
+    Cierre planillas
+    Cierre planillas gral.
+    Conciliación bancaria
+    Impresor manual de cheques
+  Sub-sistema ajustes
+    Altas/modif. variables de ajuste
+    Altas/modif. coef./cotiz.
+    Altas/modif. tipos de ajuste
+    Asiento de ajuste
+  Sub-sistema cartera de valores
+    Altas/modif. tipos de cartera
+    Ingreso de valores
+    Consulta por fecha ingreso
+    Consulta por fecha acreditación
+    Consulta por fecha egreso
+    Consulta de movimientos diarios
+    Listado cartera de valores
+    Egreso de valores
+    Prueba de valores
+    Ingreso/egreso valores
+  Sub-sistema agrupaciones
+    Alta de agrupaciones
+    Consulta de saldos
+    Balance de agrupaciones
+    Carga de presupuestos
+    Consulta comparativa mensual
+    Consulta de presupuestos
+  Carga de asientos diario general
+  Consulta de mayor por pantalla
+  Consulta de saldos de cuentas
+  Consulta de asientos
+ALTAS Y ACTUALIZACIONES
+  Ventas
+    Convenios-conceptos
+      Convenios clientes
+      Conceptos
+      Conceptos de impresión
+      Fórmulas
+      Matrices
+      Tipo de concepto impositivo
+      Programas
+      Consulta de programas
+    Novedades
+      Alta de novedades
+      Carga de novedades
+      Cons. novedades activas
+      Cons. novedades inform. activas
+      Cons. novedades confirmadas
+      Cons. novedades inform. confirm.
+      Activa - desactiva novedades
+      Borra novedades
+      Alta planilla de novedades
+      Generador planilla de novedades
+      Visualización planilla de novedades
+    Liquidación y controles
+      Alta de liquidaciones
+      Alta de lotes
+      Liquidación-lote
+      Liquidador
+      Control totales por liquidación
+      Resumen por concepto
+      Comparación por cliente
+      Comparación por concepto
+      Comparación comprobantes e/fechas
+      Comparación por conceptos e/fecha
+      Numerador
+      Impresor (socio desde/hasta) S/C
+      Imprime A (socio desde/hasta) S/C
+      Imprime B (socio desde/hasta) S/C
+      Imprime C (socio desde/hasta) S/C
+      Imprime (Nº factura desde/hasta) S/C
+      Confirmador
+    Comprobantes
+    Datos de entrada comprobantes
+    Conjunto de comprobantes
+    Alta de reportes
+    Valores
+    Parámetros
+    Habilitación de procesos
+    Datos de entrada por código
+  Compras
+    Convenios-conceptos
+      Convenios proveedores
+      Conceptos
+      Conceptos de impresión
+      Fórmulas
+      Matrices
+      Tipo de concepto impositivo
+      Programas
+      Consulta de programas
+    Novedades
+      Alta de novedades
+      Carga de novedades
+      Cons. novedades activas
+      Cons. novedades inform. activas
+      Cons. novedades confirmadas
+      Cons. novedades inform. confirm.
+      Activa - desactiva novedades
+      Borra novedades
+      Alta planilla de novedades
+      Generador planilla de novedades
+      Visualización planilla de novedades
+    Comprobantes
+    Conjunto de comprobantes
+    Alta de reportes
+    Valores
+    Parámetros
+    Habilitación de procesos
+    Datos de entrada comprobantes
+    Datos de entrada x cód. comprobantes
+  Artículos-precios
+    Artículos
+    Encuadre impositivo
+    Encuadre Ing. Brutos
+    Impuestos internos
+    Patrón de carga
+    Alta catálogo
+    Asignación art. a catálogo
+    Art. c/comprob. part.
+    Art-partidas-observ.
+    Listado de artículos
+    Tipos de precio
+    Carga de precios
+    Redondea precios
+    Almacena precios históricos
+    Carga de precios históricos
+    Composición de artículos
+    Artículos en composiciones (implosión)
+    Despiece completo artículos (explosión)
+    Actualiza lista de precios 3
+    Alta de unidades de medida
+  Percepciones-retenciones
+    Ventas
+      Generador ret. sufridas II.BB.
+      Exportador ret. sufridas II.BB.
+      Generador ret. sufridas IVA
+      Exportador ret. sufridas IVA
+      Generador ret. sufridas Ganancias
+      Exportador ret. sufridas Ganancias
+      Generador ret. sufridas SUSS
+      Exportador ret. sufridas SUSS
+    Compras
+      Generador perc. II.BB.
+      Exportador perc. II.BB.
+      Generador perc. IVA
+      Exportador perc. IVA
+      Generador Ganancias
+      Exportador Ganancias
+    Aplicación retenciones
+    Tipos de retención
+    Encuadres de retención
+    Incorporador padrón rentas
+  Talonarios
+  Talonarios con CAI
+  Cajeros
+  Turnos
+  Condiciones de pago
+  Empresa transportista
+  Entidades recaudadoras
+  Empresas
+  Administración
+  Textos generales
+  Textos por empresa
+  Tipo interdepósito
+  Moneda
+  Cotización por día
+  Variables
+  Alta depósito
+  Tipo de agente
+  Parámetros por usuario
+  Formularios/comprobantes
+  Tipo concepto impositivo
+  Encuadres impositivos
+  Copiador de leyendas
+  Empresa
+VENTAS
+  Clientes sucursales
+    Alta clientes
+    Listado de clientes
+    Listado de clientes exportable a Excel
+  Consultas por cliente
+    Cobranzas
+      Consulta de recibos
+      Consulta de conciliaciones
+      Comprobantes cancelados
+      Conceptos cobrados
+      Resumen cobranzas
+      Arqueo de caja
+      Apertura de día
+      Cierre de día
+      Consulta por forma de cobro
+      Rotación cobranza
+    Cuenta corriente
+    Balance de saldos
+    Deuda
+    Deuda con vencimientos múltiples
+    Deuda a plazos
+    Comprobantes emitidos
+    Anticipos emitidos
+    Totales por liquidación
+    Resumen por concepto
+    Comparación por conceptos
+    Comparación de liquidaciones
+    Consulta de presupuestos
+    Consulta de ord. de compra conf.
+    Consulta de pedidos
+    Consulta de remitos salida
+    Consulta de remitos entrada
+    Consulta de facturas
+    Deuda vencida cliente
+  Consultas por artículo
+    Planillas-artículo
+      Alta planillas
+      Generación planillas
+      Visualización planillas
+    Presupuestos
+    Ord. de compra conf.
+    Pedidos
+    Remitos entrada
+    Remitos salida
+    Facturas
+    Notas de débito
+    Notas de crédito
+    Comprobantes agrupados
+    Facturación por familia
+    Pedidos producción
+  Visualización y anulación
+    Presupuestos
+    Ord. de compra conf.
+    Pedidos
+    Remitos sal.
+    Remitos ent.
+    Facturas
+    Notas de débito
+    Notas de crédito
+    Recibos
+    Conciliaciones
+  Planillas y asientos
+    Planillas y asientos (submenú sin captura)
+  Estadísticas
+    Facturación por familia
+    Facturación por clasificación en pesos
+    Facturación por distribuidor en pesos
+    Facturación por zona en pesos
+    Facturación por zona en unidades
+    Facturación por distribuidor en unidades
+    Facturación por provincia
+    Consulta de remitos detallada
+    Reporte envío encuestas
+  Presupuestos
+  Ord. de compra conf.
+  Pedidos
+  Pedidos exportación
+  Remito salida
+  Remito salida exportación
+  Remitos entrada
+  Facturas
+  Notas de débito
+  Notas de crédito
+  Cobranza
+  Conciliaciones
+  Remito salida x reclamo
+COMPRAS
+  Proveedores sucursales
+    Alta proveedores
+    Listado proveedores
+    Alta despacho de importación
+    Listado proveedores exportable a Excel
+  Consultas por proveedor
+    Pagos
+      Comprobantes cancelados
+      Conceptos pagados
+      Consulta de órdenes de pago
+      Consulta por forma de pago
+      Resumen de pagos e/fecha
+      Consulta de conciliaciones
+      Impresor de cheques
+    Cuenta corriente
+    Balance de saldos
+    Deuda
+    Comprobantes emitidos
+    Anticipos emitidos
+    Resumen por concepto
+    Ord. de compra conf.
+    Pedidos
+    Remitos salida
+    Remitos entrada
+    De facturas
+    Cotizaciones
+    Detalle de importaciones
+  Consultas por artículo
+    Pedidos
+    Remitos entrada
+    Remitos salida
+    Facturas
+    Notas de débito
+    Notas de crédito
+    Proveedor por artículo
+    Artículo por proveedor
+    Comprobantes agrupados
+  Visualización y anulación
+    Pedidos
+    Remitos ent.
+    Remitos sal.
+    Facturas
+    Notas de débito
+    Notas de crédito
+    Orden de pago
+    Conciliación
+  Planillas y asientos
+    Alta de asientos
+    Alta de planillas
+    Alta grupo de planillas
+    Actualización de liquidaciones
+    Generación de planillas
+    Visualización de planillas
+    Consulta de asientos
+    Mayorización subdiarios
+    Impresión planilla IVA compras
+    Visualización planillas II
+    Régimen información compras
+  Estadísticas
+    Facturación por proveedor
+    Total retenciones
+  Cotizaciones
+  Pedidos
+  Remitos ent.
+  Remitos sal.
+  Facturas
+  Facturas contado
+  Notas de débito
+  Notas de crédito
+  Orden de pago
+  Asignación pagos
+  Asignación pagos + impresión
+  Conciliaciones
+STOCK
+  Remito entrada proveedores
+  Remito entrada clientes
+  Remito salida clientes
+  Remito salida proveedores
+  Remito interdepósito
+  Visualización remito interdepósito
+  Consulta movimiento por artículo
+  Consulta stock actual
+  Consulta stock valorizado (lista)
+  Balance de stock
+  Evaluación stock mínimo
+  Evaluación stock para producción
+  Remito entrada ajuste
+  Remito salida ajuste
+  Trazabilidad por artículo
+  Remito salida por reclamo
+  Consulta de stock por depósito
+  Entradas - salidas por artículo partida
+  Stock debajo del mínimo
+  Corte de stock
+RECLAMOS
+  Artículos vinculados
+  Consulta de reclamos II
+  Consulta de reclamos
+  Consulta reclamos por equipo
+  Reclamos pendientes
+  Fallas por equipo
+  Artículos vinculados por nro. serie
+  Visualización remito interdepósito
+  Carga de reclamos
+  Remito interdepósito
+  Remito final no facturable
+  Repuesto por máquina
+  Impresión reclamo
+  Impresión reclamo en inglés
+  Alta de orden de servicio
+  Alta de sector profesional
+  Tiempo de reclamos 2 - service con llamado previo
+  Tiempo de reclamos telefónicos
+  Fallas por equipo exportable a Excel
+  Remito final no facturable oficial (FTO VTA 5)
+PRODUCCIÓN
+  Trazabilidad (submenú)
+  Carga plan de producción
+  Alta orden de producción
+  Alta de legajos
+  Alta de recursos
+  Pedido de armado
+  Visualización pedido armado
+  Remito interdepósito
+  Alta de procesos
+  Alta sector profesional
+  Parte de producción
+  Visualización parte de producción
+  Costos por parte de producción
+  Alta partes de trabajo
+  Visualización remito entrada del parte
+  Composición valorizada despiece completo
+  Insumos necesarios
+  Consulta costos por parte de producción
+  Actualizador de costos
+  Trazabilidad
+  Consulta de partes de trabajo
+  Listado de costos
+  Reporte de electrodos en equipos
+CONTACTOS
+  Carga de contactos
+  Consulta de contactos
+ANÁLISIS DE INSUMOS
+  Carga de producción a analizar
+  Listado de insumos
+CONTROL DE CALIDAD
+  Visualización de remito de entrada
+  Reporte control de calidad
+  Remitos pendientes de control de calidad
+`;
+
+const FREQS = [
+  { k: "d", label: "Diario", w: 20 },
+  { k: "s", label: "Semanal", w: 4 },
+  { k: "m", label: "Mensual", w: 1 },
+  { k: "r", label: "Rara vez", w: 0.25 },
+];
+const FREQ_W = Object.fromEntries(FREQS.map(f => [f.k, f.w]));
+const FREQ_L = Object.fromEntries(FREQS.map(f => [f.k, f.label]));
+
+function slug(s) {
+  return s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+}
+
+// --- Parseo del árbol -----------------------------------------------------
+const MENUS = [];   // [{label, id, sections:[{title, leaves:[...]}]}]
+const LEAVES = [];  // [{id, label, trail, menuId}]
+(function parse() {
+  const lines = TREE_TXT.split("\n").filter(l => l.trim());
+  const items = lines.map(l => ({ depth: (l.match(/^ */)[0].length) / 2, label: l.trim() }));
+  const seen = new Set();
+  const stack = [];
+  items.forEach((it, i) => {
+    const next = items[i + 1];
+    const hasKids = next && next.depth > it.depth;
+    stack.length = it.depth;
+    stack[it.depth] = it.label;
+    if (it.depth === 0) { MENUS.push({ label: it.label, id: slug(it.label), leaves: [] }); return; }
+    if (hasKids) return;
+    const menu = MENUS[MENUS.length - 1];
+    const trail = stack.slice(1, it.depth).join(" › ");
+    let id = stack.slice(0, it.depth + 1).map(slug).join("__");
+    while (seen.has(id)) id += "_x";
+    seen.add(id);
+    const leaf = { id, label: it.label, trail, menuId: menu.id };
+    menu.leaves.push(leaf);
+    LEAVES.push(leaf);
+  });
+})();
+const TOTAL = LEAVES.length;
+
+// --- Estado --------------------------------------------------------------
+let canWrite = false, ready = false, email = "";
+let mine = { nombre: "", area: "", notas: "", marcas: {} };
+let dirty = false, saving = false, saveTimer = null;
+let all = []; // [{email, nombre, area, notas, marcas}]
+const $ = id => document.getElementById(id);
+
+function notice(text) { const n = $("notice"); n.textContent = text; n.hidden = !text; }
+function setSaveState(text, ok) { const s = $("save-state"); s.textContent = text; s.classList.toggle("ok", !!ok); }
+
+// --- Checklist -----------------------------------------------------------
+function renderTree() {
+  const q = slug($("q").value || "").replace(/_/g, " ").trim();
+  const only = $("only").checked;
+  const tree = $("tree");
+  const openState = {};
+  tree.querySelectorAll("details.menu").forEach(d => openState[d.dataset.id] = d.open);
+  tree.textContent = "";
+  let shown = 0;
+  for (const menu of MENUS) {
+    const leaves = menu.leaves.filter(l => {
+      if (only && !mine.marcas[l.id]) return false;
+      if (!q) return true;
+      return slug(l.label + " " + l.trail).replace(/_/g, " ").includes(q);
+    });
+    if (!leaves.length) continue;
+    shown += leaves.length;
+    const marked = menu.leaves.filter(l => mine.marcas[l.id]).length;
+    const det = document.createElement("details");
+    det.className = "menu"; det.dataset.id = menu.id;
+    det.open = q || only ? true : !!openState[menu.id];
+    const sum = document.createElement("summary");
+    sum.append(menu.label);
+    const c = document.createElement("span"); c.className = "count";
+    c.innerHTML = `<b>${marked}</b> marcadas · ${menu.leaves.length} pantallas`;
+    sum.append(c);
+    det.append(sum);
+    const body = document.createElement("div"); body.className = "menu-body";
+    let lastTrail = null;
+    for (const l of leaves) {
+      if (l.trail !== lastTrail) {
+        if (l.trail) { const h = document.createElement("div"); h.className = "group-h"; h.textContent = l.trail; body.append(h); }
+        else if (lastTrail !== null) { const h = document.createElement("div"); h.className = "group-h"; h.textContent = "Directo en el menú"; body.append(h); }
+        lastTrail = l.trail;
+      }
+      const row = document.createElement("div");
+      row.className = "row" + (mine.marcas[l.id] ? " on" : "");
+      row.dataset.id = l.id;
+      const lbl = document.createElement("div"); lbl.className = "lbl"; lbl.textContent = l.label;
+      const chips = document.createElement("div"); chips.className = "chips"; chips.setAttribute("role", "group"); chips.setAttribute("aria-label", "Frecuencia: " + l.label);
+      for (const f of FREQS) {
+        const b = document.createElement("button");
+        b.className = "chip"; b.type = "button"; b.dataset.f = f.k; b.textContent = f.label;
+        b.setAttribute("aria-pressed", mine.marcas[l.id] === f.k ? "true" : "false");
+        b.disabled = !canWrite;
+        chips.append(b);
+      }
+      row.append(lbl, chips);
+      body.append(row);
+    }
+    det.append(body);
+    tree.append(det);
+  }
+  if (!shown) {
+    const e = document.createElement("div"); e.className = "placeholder";
+    e.textContent = only ? "Todavía no marcaste ninguna pantalla." : "Ninguna pantalla coincide con la búsqueda.";
+    tree.append(e);
+  }
+}
+
+$("tree").addEventListener("click", e => {
+  const b = e.target.closest(".chip"); if (!b || b.disabled) return;
+  const row = b.closest(".row"); const id = row.dataset.id; const f = b.dataset.f;
+  if (mine.marcas[id] === f) delete mine.marcas[id]; else mine.marcas[id] = f;
+  row.classList.toggle("on", !!mine.marcas[id]);
+  row.querySelectorAll(".chip").forEach(c => c.setAttribute("aria-pressed", mine.marcas[id] === c.dataset.f ? "true" : "false"));
+  const det = row.closest("details.menu");
+  const menu = MENUS.find(m => m.id === det.dataset.id);
+  det.querySelector(".count").innerHTML = `<b>${menu.leaves.filter(l => mine.marcas[l.id]).length}</b> marcadas · ${menu.leaves.length} pantallas`;
+  queueSave(1500);
+});
+$("q").addEventListener("input", renderTree);
+$("only").addEventListener("change", renderTree);
+$("nombre").addEventListener("input", () => { mine.nombre = $("nombre").value; queueSave(1200); });
+$("area").addEventListener("change", () => { mine.area = $("area").value; queueSave(); });
+$("notas").addEventListener("input", () => { mine.notas = $("notas").value; queueSave(1200); });
+
+// --- Guardado en la planilla --------------------------------------------
+function queueSave(delay = 600) {
+  if (!ready || !canWrite) return;
+  dirty = true;
+  setSaveState("Sin guardar…");
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(flush, delay);
+}
+function flush() {
+  if (saving || !dirty) return;
+  saving = true; dirty = false;
+  setSaveState("Guardando…");
+  const body = { nombre: mine.nombre.slice(0, 80), area: mine.area, notas: mine.notas.slice(0, 4000), marcas: { ...mine.marcas } };
+  google.script.run
+    .withSuccessHandler(() => {
+      saving = false;
+      if (dirty) { clearTimeout(saveTimer); saveTimer = setTimeout(flush, 400); }
+      else setSaveState("Guardado", true);
+    })
+    .withFailureHandler(() => {
+      saving = false; dirty = true;
+      setSaveState("No se pudo guardar. Reintentando…");
+      clearTimeout(saveTimer); saveTimer = setTimeout(flush, 3000 + Math.random() * 2000);
+    })
+    .guardar(body);
+}
+window.addEventListener("beforeunload", e => { if (dirty || saving) { e.preventDefault(); e.returnValue = ""; } });
+
+// --- Resultados ----------------------------------------------------------
+function loadResults() {
+  const box = $("results");
+  if (!all.length) box.innerHTML = '<div class="placeholder">Cargando respuestas…</div>';
+  google.script.run
+    .withSuccessHandler(list => { all = list || []; renderResults(); })
+    .withFailureHandler(() => { box.innerHTML = '<div class="placeholder">No se pudieron cargar las respuestas. Probá con “Actualizar”.</div>'; })
+    .obtenerTodas();
+}
+
+function renderResults() {
+  const box = $("results");
+  // Lo propio se muestra como está en pantalla, aunque todavía no se haya guardado.
+  const people = all.filter(r => r.email !== email);
+  if (email && (Object.keys(mine.marcas).length || mine.area || mine.notas.trim())) people.push({ email, ...mine });
+
+  const areaF = $("res-area").value;
+  const areas = [...new Set(people.map(r => r.area).filter(Boolean))].sort();
+  const sel = $("res-area"); const cur = sel.value;
+  sel.innerHTML = '<option value="">Todas las áreas</option>' + areas.map(a => `<option>${a.replace(/</g, "&lt;")}</option>`).join("");
+  sel.value = areas.includes(cur) ? cur : "";
+
+  const rows = people.filter(r => r && r.marcas && (!areaF || r.area === areaF));
+  const nameOf = r => r.nombre || r.email;
+
+  box.textContent = "";
+  if (!rows.length) {
+    box.innerHTML = '<div class="placeholder">Todavía no hay respuestas' + (areaF ? " de esta área" : "") + '. Cuando alguien marque sus pantallas en “Mi respuesta”, aparecen acá.</div>';
+    return;
+  }
+
+  const usage = {}; // leafId -> [{r, f}]
+  for (const r of rows) for (const [leaf, f] of Object.entries(r.marcas)) {
+    if (!FREQ_W[f]) continue;
+    (usage[leaf] = usage[leaf] || []).push({ r, f });
+  }
+  const used = LEAVES.filter(l => usage[l.id]).length;
+
+  const tiles = document.createElement("div"); tiles.className = "tiles";
+  tiles.innerHTML = `
+    <div class="tile"><span class="n">${rows.length}</span><span class="t">personas respondieron</span></div>
+    <div class="tile"><span class="n">${used}</span><span class="t">pantallas usadas por alguien</span></div>
+    <div class="tile"><span class="n">${TOTAL - used}</span><span class="t">de ${TOTAL} pantallas no las marcó nadie</span></div>`;
+  box.append(tiles);
+
+  const score = l => (usage[l.id] || []).reduce((s, u) => s + FREQ_W[u.f], 0);
+  const menus = MENUS.map(m => ({ m, used: m.leaves.filter(l => usage[l.id]), score: m.leaves.reduce((s, l) => s + score(l), 0) }))
+    .sort((a, b) => b.score - a.score);
+
+  for (const { m, used: u } of menus) {
+    const det = document.createElement("details"); det.className = "menu res-menu"; det.open = u.length > 0;
+    const sum = document.createElement("summary"); sum.append(m.label);
+    const c = document.createElement("span"); c.className = "count";
+    c.innerHTML = `<b>${u.length}</b> usadas · ${m.leaves.length} pantallas`;
+    sum.append(c); det.append(sum);
+    const bar = document.createElement("div"); bar.className = "bar";
+    bar.innerHTML = `<span style="width:${(u.length / m.leaves.length * 100).toFixed(1)}%"></span>`;
+    det.append(bar);
+    for (const l of [...u].sort((a, b) => score(b) - score(a))) {
+      const us = usage[l.id];
+      const row = document.createElement("div"); row.className = "res-row";
+      const lbl = document.createElement("div"); lbl.className = "lbl"; lbl.textContent = l.label;
+      if (l.trail) { const s = document.createElement("small"); s.textContent = l.trail; lbl.append(s); }
+      const right = document.createElement("div");
+      const st = document.createElement("div"); st.className = "stack";
+      for (const f of FREQS) {
+        const k = us.filter(x => x.f === f.k).length;
+        if (k) { const s = document.createElement("span"); s.style.width = (k / rows.length * 100) + "%"; s.style.background = `var(--f-${f.k})`; s.title = `${f.label}: ${k}`; st.append(s); }
+      }
+      const sn = document.createElement("div"); sn.className = "stack-n"; sn.textContent = `${us.length} de ${rows.length}`;
+      right.append(st, sn);
+      const ppl = document.createElement("div"); ppl.className = "people";
+      for (const x of us) {
+        const p = document.createElement("span"); p.className = "person";
+        const i = document.createElement("i"); i.textContent = nameOf(x.r);
+        p.append(i, " · " + FREQ_L[x.f]);
+        ppl.append(p);
+      }
+      row.append(lbl, right, ppl);
+      det.append(row);
+    }
+    const unused = m.leaves.filter(l => !usage[l.id]);
+    if (unused.length) {
+      const ud = document.createElement("details"); ud.className = "unused";
+      const us = document.createElement("summary"); us.textContent = `${unused.length} pantallas que nadie marcó`;
+      const ul = document.createElement("ul");
+      for (const l of unused) { const li = document.createElement("li"); li.textContent = l.trail ? `${l.trail} › ${l.label}` : l.label; ul.append(li); }
+      ud.append(us, ul); det.append(ud);
+    }
+    box.append(det);
+  }
+
+  const withNotes = rows.filter(r => r.notas && r.notas.trim());
+  if (withNotes.length) {
+    const nb = document.createElement("div"); nb.className = "notes";
+    const h = document.createElement("h3"); h.textContent = "Lo que se hace por fuera del sistema"; nb.append(h);
+    for (const r of withNotes) {
+      const d = document.createElement("div"); d.className = "note";
+      const b = document.createElement("b"); b.textContent = nameOf(r) + (r.area ? ` (${r.area})` : "") + ": ";
+      d.append(b, r.notas);
+      nb.append(d);
+    }
+    box.append(nb);
+  }
+}
+$("res-area").addEventListener("change", renderResults);
+$("refresh").addEventListener("click", loadResults);
+
+// --- Pestañas -------------------------------------------------------------
+function showTab(which) {
+  const res = which === "res";
+  $("tab-form").setAttribute("aria-selected", String(!res));
+  $("tab-res").setAttribute("aria-selected", String(res));
+  $("view-form").hidden = res; $("view-form").style.display = res ? "none" : "flex";
+  $("view-res").hidden = !res; $("view-res").style.display = res ? "flex" : "none";
+  if (res && ready) loadResults();
+  try { localStorage.setItem("qs-tab", which); } catch (_) {}
+}
+$("tab-form").addEventListener("click", () => showTab("form"));
+$("tab-res").addEventListener("click", () => showTab("res"));
+
+// --- Arranque -------------------------------------------------------------
+renderTree();
+try { if (localStorage.getItem("qs-tab") === "res") showTab("res"); } catch (_) {}
+
+google.script.run
+  .withSuccessHandler(res => {
+    email = res.email || "";
+    if (!email) {
+      $("who").textContent = "";
+      notice("No pudimos identificar tu cuenta. Entrá con tu mail de la empresa y volvé a abrir el link.");
+      renderTree();
+      return;
+    }
+    canWrite = true;
+    $("who").textContent = email;
+    if (res.mine) {
+      mine = { nombre: res.mine.nombre || res.nombreSugerido, area: res.mine.area || "", notas: res.mine.notas || "", marcas: { ...(res.mine.marcas || {}) } };
+      setSaveState("Guardado", true);
+    } else {
+      mine.nombre = res.nombreSugerido;
+    }
+    $("nombre").value = mine.nombre; $("area").value = mine.area; $("notas").value = mine.notas;
+    ready = true;
+    renderTree();
+    if (!res.tieneCatalogo) {
+      const menuLabel = Object.fromEntries(MENUS.map(m => [m.id, m.label]));
+      google.script.run.registrarPantallas(LEAVES.map(l => [l.id, menuLabel[l.menuId], l.trail, l.label]));
+    }
+    if (!$("view-res").hidden) loadResults();
+  })
+  .withFailureHandler(err => {
+    notice("No se pudo cargar la página: " + (err && err.message ? err.message : "error desconocido") + ". Recargá para reintentar.");
+  })
+  .cargar();
+</script>
+</body>
+</html>
