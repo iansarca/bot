@@ -1,0 +1,420 @@
+/**
+ * Sueldos — menú y lectura/escritura de la planilla (Google Apps Script).
+ *
+ * Va pegado en el editor de Apps Script de la planilla (Extensiones > Apps Script),
+ * junto con Calculo.gs, que tiene las reglas de cálculo.
+ *
+ * Hojas que se cargan a mano: Parámetros, Legajos, Escala UOM, Topes, Novedades,
+ * Aumentos previstos y Planilla original.
+ * Hojas que se regeneran solas (no editarlas): Liquidación, Proyección, Resumen,
+ * Evolución, Control y Recibo.
+ */
+
+const FORMATO = {
+  pesos: '#,##0.00',
+  porc: '0.00%',
+  num: '0',
+  periodo: '@',
+  texto: '@',
+  fecha: 'dd/mm/yyyy',
+};
+
+function onOpen() {
+  const menu = SpreadsheetApp.getUi()
+    .createMenu('Sueldos')
+    .addItem('Liquidar y actualizar todo', 'actualizarTodo')
+    .addItem('Preparar mes siguiente', 'prepararMesSiguiente')
+    .addSeparator()
+    .addItem('Ver recibo (período y legajo de la hoja Recibo)', 'verRecibo')
+    .addItem('Guardar en PDF los recibos del período', 'exportarRecibosPDF')
+    .addSeparator()
+    .addItem('Crear las hojas que falten', 'inicializar');
+  if (typeof DATOS_INICIALES !== 'undefined') menu.addItem('Cargar datos iniciales (una sola vez)', 'cargarDatosIniciales');
+  menu.addToUi();
+}
+
+// --- Acciones del menú ------------------------------------------------------------
+
+/** Arma las hojas y carga lo que trae Datos.gs (DATOS_INICIALES). Después Datos.gs se puede borrar. */
+function cargarDatosIniciales() {
+  if (typeof DATOS_INICIALES === 'undefined') {
+    SpreadsheetApp.getUi().alert('No está el archivo Datos.gs con los datos iniciales.');
+    return;
+  }
+  inicializar();
+  cargarDatos_(DATOS_INICIALES);
+  actualizarTodo();
+  // Deja armado un recibo de ejemplo del último mes.
+  const d = prepararDatos(leerTodo_());
+  const per = ultimoPeriodo(d.novedades);
+  const n = d.novedades.find(x => x.periodo === per);
+  if (n) {
+    const rec = hoja_(HOJAS.recibo);
+    rec.getRange('B2').setValue(per);
+    rec.getRange('B3').setValue(n.legajo);
+    verRecibo();
+  }
+  SpreadsheetApp.getActive().setActiveSheet(hoja_(HOJAS.resumen));
+}
+
+function actualizarTodo() {
+  const ss = SpreadsheetApp.getActive();
+  const res = calcularTodo(leerTodo_());
+  escribirTabla_(HOJAS.liquidacion, res.liquidacion);
+  escribirTabla_(HOJAS.proyeccion, res.proyeccion);
+  escribirTabla_(HOJAS.resumen, res.resumen);
+  escribirTabla_(HOJAS.evolucion, res.evolucion);
+  escribirTabla_(HOJAS.control, res.control);
+  const revisar = res.control.filas.filter(f => f[f.length - 1] !== 'OK').length;
+  let msg = res.liquidacion.filas.length + ' liquidaciones y ' + res.proyeccion.filas.length + ' meses proyectados.';
+  if (res.control.filas.length) msg += ' Control: ' + revisar + ' para revisar.';
+  if (res.avisos.length) {
+    SpreadsheetApp.getUi().alert('Listo, con avisos', msg + '\n\n' + res.avisos.slice(0, 30).join('\n'), SpreadsheetApp.getUi().ButtonSet.OK);
+  } else {
+    ss.toast(msg, 'Sueldos', 8);
+  }
+}
+
+function prepararMesSiguiente() {
+  const ui = SpreadsheetApp.getUi();
+  const d = prepararDatos(leerTodo_());
+  const res = prepararMes(d);
+  if (!res.periodo) {
+    ui.alert('No hay ningún mes cargado en Novedades. Cargá el primero a mano.');
+    return;
+  }
+  const ok = ui.alert(
+    'Preparar ' + res.periodo,
+    'Se agregan ' + res.filas.length + ' filas a Novedades para ' + res.periodo +
+      ', copiando básico, neto pactado, a cuenta y anticipo del mes anterior.\n\n' +
+      'Antes de seguir, si cambió la escala UOM cargala en la hoja Escala UOM, así se descuenta del anticipo.',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (ok !== ui.Button.OK) return;
+  const sh = hoja_(HOJAS.novedades);
+  const enc = encabezado_(sh);
+  const filas = res.filas.map(n => COLUMNAS.novedades.map(c => {
+    const v = n[c[0]];
+    if (c[0] === 'periodo') return res.periodo;
+    return v === 0 || v === undefined ? '' : v;
+  }));
+  const orden = COLUMNAS.novedades.map(c => enc.indexOf(c[1].toLowerCase()));
+  const ancho = Math.max(enc.length, 1);
+  const salida = filas.map(f => {
+    const fila = new Array(ancho).fill('');
+    orden.forEach((col, i) => { if (col >= 0) fila[col] = f[i]; });
+    return fila;
+  });
+  const desde = sh.getLastRow() + 1;
+  const colPer = enc.indexOf('período') + 1;
+  if (colPer > 0) sh.getRange(desde, colPer, salida.length, 1).setNumberFormat('@');
+  sh.getRange(desde, 1, salida.length, ancho).setValues(salida);
+  sh.activate();
+  sh.setActiveRange(sh.getRange(desde, 1));
+  SpreadsheetApp.getActive().toast('Cargá las horas extra y demás novedades de ' + res.periodo + ' y después usá Sueldos > Liquidar y actualizar todo.', 'Sueldos', 10);
+}
+
+function verRecibo() {
+  const sh = hoja_(HOJAS.recibo);
+  const per = periodo(normalizar_(sh.getRange('B2').getValue()));
+  const leg = texto(sh.getRange('B3').getValue());
+  if (!per || !leg) {
+    SpreadsheetApp.getUi().alert('En la hoja Recibo completá el período (B2, aaaa-mm) y el legajo (B3).');
+    return;
+  }
+  const d = prepararDatos(leerTodo_());
+  const r = buscarLiquidacion_(d, per, leg);
+  if (!r) {
+    SpreadsheetApp.getUi().alert('No hay liquidación para el legajo ' + leg + ' en ' + per + '.');
+    return;
+  }
+  dibujarRecibo_(sh, armarRecibo(d.legajos.get(leg), r, d.p));
+  sh.activate();
+}
+
+function exportarRecibosPDF() {
+  const ss = SpreadsheetApp.getActive();
+  const sh = hoja_(HOJAS.recibo);
+  const per = periodo(normalizar_(sh.getRange('B2').getValue()));
+  if (!per) {
+    SpreadsheetApp.getUi().alert('En la hoja Recibo completá el período (B2, aaaa-mm).');
+    return;
+  }
+  const d = prepararDatos(leerTodo_());
+  const reales = liquidarReales(d);
+  let filas = reales.filter(r => r.periodo === per);
+  if (!filas.length) filas = proyectar(d, reales).filter(r => r.periodo === per);
+  if (!filas.length) {
+    SpreadsheetApp.getUi().alert('No hay liquidaciones para ' + per + '.');
+    return;
+  }
+  const padres = DriveApp.getFileById(ss.getId()).getParents();
+  const base = padres.hasNext() ? padres.next() : DriveApp.getRootFolder();
+  const carpeta = base.createFolder('Recibos ' + per);
+  const legOriginal = sh.getRange('B3').getValue();
+  for (const r of filas) {
+    dibujarRecibo_(sh, armarRecibo(d.legajos.get(r.legajo), r, d.p));
+    SpreadsheetApp.flush();
+    carpeta.createFile(pdfDeHoja_(ss, sh).setName(per + ' - ' + r.legajo + ' - ' + r.nombre + '.pdf'));
+    Utilities.sleep(400); // Google limita las exportaciones seguidas
+  }
+  sh.getRange('B3').setValue(legOriginal);
+  SpreadsheetApp.getUi().alert(filas.length + ' recibos guardados en la carpeta "' + carpeta.getName() + '":\n' + carpeta.getUrl());
+}
+
+const INSTRUCCIONES = [
+  ['SUELDOS — cálculo, control y proyección', 'titulo'],
+  [''],
+  ['CADA MES', 'h'],
+  ['1. Si hubo paritaria UOM, agregá una fila en "Escala UOM" con el nuevo básico, desde ese período.'],
+  ['2. Sueldos > Preparar mes siguiente: copia a "Novedades" lo del mes anterior para el personal activo.'],
+  ['3. En "Novedades" cargá lo que cambie: horas extra, otros conceptos, descuentos, y los días si alguien entró o salió en el mes.'],
+  ['   Fuera de convenio: cargá el sueldo básico (bruto) o el neto pactado. Si cargás el neto, el bruto se calcula solo.'],
+  ['4. Sueldos > Liquidar y actualizar todo. Se regeneran Liquidación, Proyección, Resumen, Evolución y Control.'],
+  ['5. Para controlar o mandar al estudio: la hoja "Liquidación" filtrada por período, o los recibos en PDF desde la hoja "Recibo".'],
+  [''],
+  ['PROYECCIONES', 'h'],
+  ['En "Aumentos previstos" cargá los aumentos que esperás. Hasta qué mes se proyecta: Parámetros > PROYECTAR_HASTA.'],
+  ['UOM: "Aumento de escala" sube el básico. "Anticipo a cuenta" agrega un anticipo (% del bruto del mes anterior)'],
+  ['que se va absorbiendo con cada aumento de escala. Fuera de convenio: "Aumento de sueldo".'],
+  [''],
+  ['HOJAS', 'h'],
+  ['Amarillas (se cargan a mano): Novedades, Legajos, Escala UOM, Aumentos previstos, Parámetros, Topes, Planilla original.'],
+  ['Grises (se regeneran solas, no las edites): Resumen, Liquidación, Proyección, Evolución, Control, Recibo.'],
+  ['Control compara lo calculado con "Planilla original" (los brutos y netos de la planilla anterior).'],
+  [''],
+  ['REGLAS QUE USA', 'h'],
+  ['• Antigüedad UOM: 1% del básico por cada año cumplido al último día del mes (más los años reconocidos del legajo).'],
+  ['• Aportes: jubilación 11%, Ley 19.032 3%, obra social 3% (con el tope de la hoja Topes). UOM afiliados: cuota sindical 2,5% + aporte fijo.'],
+  ['• Régimen de aportes del legajo: Completo, Solo jubilación o Sin aportes (sin aportes tampoco lleva contribuciones ni ART).'],
+  ['• Aguinaldo: en junio y diciembre, 50% de la mejor remuneración del semestre, proporcional si entró en el semestre.'],
+  ['• Todos los porcentajes y montos fijos se cambian en Parámetros.'],
+  [''],
+  ['No calcula Ganancias ni reemplaza el recibo oficial, el F.931 ni el Libro de Sueldos Digital: eso lo sigue haciendo el estudio.'],
+];
+
+const ORDEN_HOJAS = ['instrucciones', 'resumen', 'liquidacion', 'novedades', 'legajos', 'escala', 'aumentos',
+  'proyeccion', 'evolucion', 'control', 'recibo', 'parametros', 'topes', 'planilla'];
+
+const LISTAS = {
+  legajos: { convenio: [CONVENIO_UOM, CONVENIO_FC], regimen: [REGIMEN_COMPLETO, REGIMEN_SOLO_JUB, REGIMEN_SIN], afiliado: ['Sí', 'No'], estado: ['Activo', 'Baja'] },
+  aumentos: { convenio: [CONVENIO_UOM, CONVENIO_FC], tipo: [AUMENTO_ESCALA, AUMENTO_ANTICIPO, AUMENTO_SUELDO] },
+};
+
+/** Crea las hojas que no existan, con encabezados, formatos, listas desplegables y los parámetros por defecto. */
+function inicializar() {
+  const ss = SpreadsheetApp.getActive();
+  const creadas = [];
+  const crear = clave => {
+    let sh = ss.getSheetByName(HOJAS[clave]);
+    if (sh) return null;
+    sh = ss.insertSheet(HOJAS[clave]);
+    creadas.push(HOJAS[clave]);
+    return sh;
+  };
+  for (const clave of Object.keys(COLUMNAS)) {
+    const sh = crear(clave);
+    if (!sh) continue;
+    const cols = COLUMNAS[clave];
+    sh.getRange(1, 1, 1, cols.length).setValues([cols.map(c => c[1])])
+      .setFontWeight('bold').setFontColor('#ffffff').setBackground('#1f3864').setWrap(true).setVerticalAlignment('middle');
+    sh.setFrozenRows(1);
+    sh.setTabColor('#ffc000');
+    cols.forEach((c, i) => {
+      sh.getRange(2, i + 1, sh.getMaxRows() - 1, 1).setNumberFormat(FORMATO[c[2]] || '@');
+      sh.setColumnWidth(i + 1, c[0] === 'nombre' || c[0] === 'descripcion' || c[0] === 'observaciones' ? 280 : 130);
+      const opciones = (LISTAS[clave] || {})[c[0]];
+      if (opciones) {
+        sh.getRange(2, i + 1, sh.getMaxRows() - 1, 1)
+          .setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(opciones, true).setAllowInvalid(false).build());
+      }
+    });
+    if (clave === 'parametros') {
+      sh.getRange(2, 2, PARAMETROS_DEFECTO.length, 1).setNumberFormat('General');
+      sh.getRange(2, 1, PARAMETROS_DEFECTO.length, 3).setValues(PARAMETROS_DEFECTO);
+      PARAMETROS_DEFECTO.forEach((d, i) => {
+        if (typeof d[1] === 'number') sh.getRange(i + 2, 2).setNumberFormat(d[1] < 1 ? '0.00%' : '#,##0.00');
+      });
+      sh.setColumnWidth(1, 220);
+      sh.setColumnWidth(3, 600);
+    }
+  }
+  for (const clave of ['resumen', 'liquidacion', 'proyeccion', 'evolucion', 'control', 'recibo']) {
+    const sh = crear(clave);
+    if (sh) sh.setTabColor('#999999');
+  }
+  const ins = crear('instrucciones');
+  if (ins) {
+    ins.getRange(1, 1, INSTRUCCIONES.length, 1).setValues(INSTRUCCIONES.map(f => [f[0]]));
+    INSTRUCCIONES.forEach((f, i) => {
+      if (f[1]) ins.getRange(i + 1, 1).setFontWeight('bold').setFontColor('#1f3864').setFontSize(f[1] === 'titulo' ? 14 : 11);
+    });
+    ins.setColumnWidth(1, 1000);
+  }
+  const rec = ss.getSheetByName(HOJAS.recibo);
+  if (creadas.indexOf(HOJAS.recibo) >= 0) {
+    rec.getRange('A1').setValue('Elegí período y legajo y usá Sueldos > Ver recibo').setFontColor('#666666');
+    rec.getRange('A2:A3').setValues([['Período (aaaa-mm)'], ['Legajo']]).setFontWeight('bold');
+    rec.getRange('B2').setNumberFormat('@');
+    rec.getRange('B2:B3').setBackground('#fff2cc');
+  }
+  const legs = ss.getSheetByName(HOJAS.legajos);
+  const lista = SpreadsheetApp.newDataValidation().requireValueInRange(legs.getRange('A2:A'), true).setAllowInvalid(true).build();
+  rec.getRange('B3').setDataValidation(lista);
+  const novs = ss.getSheetByName(HOJAS.novedades);
+  const colLeg = encabezado_(novs).indexOf('legajo') + 1;
+  if (colLeg > 0) novs.getRange(2, colLeg, novs.getMaxRows() - 1, 1).setDataValidation(lista);
+
+  // Ordena las pestañas y saca la hoja vacía que trae una planilla nueva.
+  ORDEN_HOJAS.forEach((clave, i) => {
+    const sh = ss.getSheetByName(HOJAS[clave]);
+    if (sh) { ss.setActiveSheet(sh); ss.moveActiveSheet(i + 1); }
+  });
+  for (const sh of ss.getSheets()) {
+    const esNuestra = Object.keys(HOJAS).some(k => HOJAS[k] === sh.getName());
+    if (!esNuestra && sh.getLastRow() === 0 && ss.getSheets().length > 1) ss.deleteSheet(sh);
+  }
+  ss.setActiveSheet(ss.getSheetByName(HOJAS.instrucciones));
+  ss.toast(creadas.length ? 'Hojas creadas: ' + creadas.join(', ') : 'No faltaba ninguna hoja.', 'Sueldos', 8);
+}
+
+/**
+ * Carga datos en las hojas de entrada vacías. datos: { legajos: [...], novedades: [...], ... }
+ * con objetos que usan las claves de COLUMNAS. Lo usa Datos.gs la primera vez.
+ */
+function cargarDatos_(datos) {
+  const ss = SpreadsheetApp.getActive();
+  for (const clave of Object.keys(datos)) {
+    if (!COLUMNAS[clave] || clave === 'parametros') continue;
+    const sh = hoja_(HOJAS[clave]);
+    const filas = datos[clave];
+    if (!filas.length) continue;
+    if (sh.getLastRow() > 1) throw new Error('La hoja "' + HOJAS[clave] + '" ya tiene datos. Los datos iniciales se cargan una sola vez, en hojas vacías.');
+    const enc = encabezado_(sh);
+    const ancho = enc.length;
+    const salida = filas.map(o => {
+      const fila = new Array(ancho).fill('');
+      COLUMNAS[clave].forEach(c => {
+        const i = enc.indexOf(c[1].toLowerCase());
+        if (i >= 0 && o[c[0]] !== undefined && o[c[0]] !== null) fila[i] = o[c[0]];
+      });
+      return fila;
+    });
+    sh.getRange(2, 1, salida.length, ancho).setValues(salida);
+  }
+  SpreadsheetApp.flush();
+  ss.toast('Datos cargados.', 'Sueldos', 5);
+}
+
+// --- Lectura ---------------------------------------------------------------------------
+
+function leerTodo_() {
+  return {
+    parametros: leerTabla_(HOJAS.parametros, COLUMNAS.parametros),
+    legajos: leerTabla_(HOJAS.legajos, COLUMNAS.legajos),
+    escala: leerTabla_(HOJAS.escala, COLUMNAS.escala),
+    topes: leerTabla_(HOJAS.topes, COLUMNAS.topes, true),
+    novedades: leerTabla_(HOJAS.novedades, COLUMNAS.novedades),
+    aumentos: leerTabla_(HOJAS.aumentos, COLUMNAS.aumentos, true),
+    planilla: leerTabla_(HOJAS.planilla, COLUMNAS.planilla, true),
+  };
+}
+
+function hoja_(nombre) {
+  const sh = SpreadsheetApp.getActive().getSheetByName(nombre);
+  if (!sh) throw new Error('Falta la hoja "' + nombre + '". Usá Sueldos > Crear las hojas que falten.');
+  return sh;
+}
+
+function encabezado_(sh) {
+  const ancho = Math.max(sh.getLastColumn(), 1);
+  return sh.getRange(1, 1, 1, ancho).getValues()[0].map(h => String(h).trim().toLowerCase());
+}
+
+/** Lee una hoja como lista de objetos, ubicando cada columna por su encabezado. */
+function leerTabla_(nombre, columnas, opcional) {
+  const sh = SpreadsheetApp.getActive().getSheetByName(nombre);
+  if (!sh) {
+    if (opcional) return [];
+    throw new Error('Falta la hoja "' + nombre + '". Usá Sueldos > Crear las hojas que falten.');
+  }
+  const valores = sh.getDataRange().getValues();
+  if (valores.length < 2) return [];
+  const enc = valores[0].map(h => String(h).trim().toLowerCase());
+  const pos = columnas.map(c => enc.indexOf(c[1].toLowerCase()));
+  const faltan = columnas.filter((c, i) => pos[i] < 0 && c[0] !== 'observaciones' && c[0] !== 'nombre' && c[0] !== 'descripcion');
+  if (faltan.length && !opcional) {
+    throw new Error('En la hoja "' + nombre + '" no encuentro la columna "' + faltan[0][1] + '". Revisá el encabezado de la fila 1.');
+  }
+  const filas = [];
+  for (let i = 1; i < valores.length; i++) {
+    const fila = valores[i];
+    if (fila.every(v => v === '' || v === null)) continue;
+    const o = {};
+    columnas.forEach((c, j) => { o[c[0]] = pos[j] >= 0 ? normalizar_(fila[pos[j]]) : ''; });
+    filas.push(o);
+  }
+  return filas;
+}
+
+/** Las fechas de la hoja pasan a texto en la zona horaria de la planilla, para no correrse un día. */
+function normalizar_(v) {
+  if (v instanceof Date) return Utilities.formatDate(v, SpreadsheetApp.getActive().getSpreadsheetTimeZone(), 'yyyy-MM-dd');
+  return v;
+}
+
+function buscarLiquidacion_(d, per, leg) {
+  const reales = liquidarReales(d);
+  return reales.find(r => r.periodo === per && r.legajo === leg) ||
+    proyectar(d, reales).find(r => r.periodo === per && r.legajo === leg);
+}
+
+// --- Escritura -------------------------------------------------------------------------
+
+/** Reemplaza todo el contenido de una hoja de salida por la tabla. */
+function escribirTabla_(nombre, tabla) {
+  const ss = SpreadsheetApp.getActive();
+  const sh = ss.getSheetByName(nombre) || ss.insertSheet(nombre);
+  sh.clear();
+  const ancho = tabla.encabezado.length;
+  sh.getRange(1, 1, 1, ancho).setValues([tabla.encabezado]).setFontWeight('bold').setWrap(true).setVerticalAlignment('middle');
+  sh.setFrozenRows(1);
+  if (tabla.filas.length) {
+    tabla.formatos.forEach((f, i) => sh.getRange(2, i + 1, tabla.filas.length, 1).setNumberFormat(FORMATO[f] || '@'));
+    sh.getRange(2, 1, tabla.filas.length, ancho).setValues(tabla.filas);
+  }
+  sh.setFrozenColumns(Math.min(4, ancho));
+}
+
+function dibujarRecibo_(sh, filas) {
+  const leg = sh.getRange('B3').getValue(), per = sh.getRange('B2').getValue();
+  sh.getRange(5, 1, Math.max(sh.getMaxRows() - 4, 1), 4).clear();
+  sh.getRange('A1').setValue('Elegí período y legajo y usá Sueldos > Ver recibo').setFontColor('#666666');
+  sh.getRange('A2:A3').setValues([['Período (aaaa-mm)'], ['Legajo']]).setFontWeight('bold');
+  sh.getRange('B2').setNumberFormat('@').setValue(per);
+  sh.getRange('B3').setValue(leg);
+  // El encabezado va como texto para que Sheets no convierta el período ni la fecha en fechas.
+  const titulo = filas.findIndex(f => f[0] === 'Concepto');
+  sh.getRange(5, 1, Math.max(titulo, 1), 4).setNumberFormat('@');
+  sh.getRange(5, 1, filas.length, 4).setValues(filas);
+  sh.getRange(5 + titulo + 1, 2, filas.length - titulo - 1, 3).setNumberFormat(FORMATO.pesos).setHorizontalAlignment('right');
+  sh.getRange(5, 1).setFontWeight('bold').setFontSize(13);
+  if (titulo >= 0) sh.getRange(5 + titulo, 1, 1, 4).setFontWeight('bold').setBackground('#e8eaed');
+  const neto = filas.findIndex(f => f[0] === 'NETO A COBRAR');
+  if (neto >= 0) sh.getRange(5 + neto, 1, 1, 2).setFontWeight('bold').setFontSize(12);
+  const tot = filas.findIndex(f => f[0] === 'Totales');
+  if (tot >= 0) sh.getRange(5 + tot, 1, 1, 4).setFontWeight('bold').setBorder(true, null, null, null, null, null);
+  sh.setColumnWidth(1, 260);
+  sh.setColumnWidths(2, 3, 140);
+}
+
+function pdfDeHoja_(ss, sh) {
+  const ultima = sh.getLastRow();
+  const url = 'https://docs.google.com/spreadsheets/d/' + ss.getId() + '/export?format=pdf' +
+    '&gid=' + sh.getSheetId() + '&range=A5:D' + ultima +
+    '&size=A4&portrait=true&fitw=true&gridlines=false&printtitle=false&sheetnames=false&pagenum=UNDEFINED' +
+    '&top_margin=0.6&bottom_margin=0.6&left_margin=0.6&right_margin=0.6';
+  const resp = UrlFetchApp.fetch(url, { headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() }, muteHttpExceptions: true });
+  if (resp.getResponseCode() !== 200) throw new Error('No se pudo generar el PDF (código ' + resp.getResponseCode() + '). Probá de nuevo en un minuto.');
+  return resp.getBlob();
+}
