@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html>
+<head>
+<base target="_top">
+<style>
+  body { font-family: Arial, sans-serif; font-size: 13px; color: #202124; margin: 0; padding: 4px 2px 12px; }
+  label { display: block; margin: 10px 0 3px; font-weight: bold; }
+  input, select, textarea { width: 100%; box-sizing: border-box; padding: 6px; font-size: 13px; border: 1px solid #c4c7c5; border-radius: 4px; }
+  .fila { display: flex; gap: 10px; }
+  .fila > div { flex: 1; }
+  .ayuda { color: #5f6368; font-size: 12px; margin-top: 3px; font-weight: normal; }
+  .botones { margin-top: 16px; display: flex; gap: 8px; }
+  button { padding: 8px 16px; font-size: 13px; border-radius: 4px; border: 1px solid #1f3864; background: #fff; color: #1f3864; cursor: pointer; }
+  button.principal { background: #1f3864; color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  .oculto { display: none; }
+  #mensaje { margin-top: 14px; padding: 10px; border-radius: 4px; display: none; white-space: pre-wrap; }
+  #mensaje.ok { background: #e6f4ea; display: block; }
+  #mensaje.error { background: #fce8e6; display: block; }
+  table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+  td { padding: 4px 2px; border-bottom: 1px solid #eee; }
+  td.monto { text-align: right; white-space: nowrap; }
+  tr.total td { font-weight: bold; border-top: 2px solid #999; }
+  .check { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
+  .check input { width: auto; }
+</style>
+</head>
+<body data-modo="<?= modo ?>">
+
+<!-- ALTA -->
+<form id="alta" class="oculto" onsubmit="return enviar(event, 'guardarAlta')">
+  <label>Apellido y nombre</label>
+  <input name="nombre" required>
+  <div class="fila">
+    <div><label>CUIL</label><input name="cuil" placeholder="20-12345678-9"></div>
+    <div><label>Fecha de ingreso</label><input name="ingreso" type="date" required></div>
+  </div>
+  <label>Convenio</label>
+  <select name="convenio" onchange="cambioConvenio(this.value)"></select>
+  <div id="soloUOM">
+    <div class="fila">
+      <div><label>Categoría</label><select name="categoria"></select></div>
+      <div><label>A cuenta futuros aumentos</label><input name="altaACuenta" type="number" step="0.01" min="0"></div>
+    </div>
+    <div class="check"><input type="checkbox" name="afiliado" id="afiliado" checked><label for="afiliado" style="margin:0">Afiliado a UOM (cuota sindical)</label></div>
+  </div>
+  <div id="soloFC" class="oculto">
+    <div class="fila">
+      <div><label>Sueldo básico (bruto)</label><input name="altaBasico" type="number" step="0.01" min="0"></div>
+      <div><label>o neto pactado</label><input name="altaNeto" type="number" step="0.01" min="0"></div>
+    </div>
+    <div class="ayuda">Si cargás el neto, el bruto se calcula solo.</div>
+  </div>
+  <label>Régimen de aportes</label>
+  <select name="regimen"><option>Completo</option><option>Solo jubilación</option><option>Sin aportes</option></select>
+  <label>Escenario <span class="ayuda">(opcional)</span></label>
+  <input name="escenario" list="escenarios" placeholder="Vacío = alta real">
+  <div class="ayuda">Con un nombre (por ejemplo "Contratar 2 operarios") es una contratación hipotética: solo aparece en la proyección de ese escenario.</div>
+  <label>Observaciones</label>
+  <input name="observaciones">
+  <div class="botones"><button class="principal" type="submit">Dar de alta</button><button type="button" onclick="google.script.host.close()">Cerrar</button></div>
+</form>
+
+<!-- BAJA -->
+<form id="baja" class="oculto" onsubmit="return enviar(event, 'guardarBaja')">
+  <label>Persona</label>
+  <select name="legajo" required onchange="limpiarSimulacion()"></select>
+  <div class="fila">
+    <div><label>Fecha de baja</label><input name="fecha" type="date" required onchange="limpiarSimulacion()"></div>
+    <div><label>Motivo</label><select name="motivo" onchange="limpiarSimulacion()"></select></div>
+  </div>
+  <label>Vacaciones ya tomadas este año (días)</label>
+  <input name="vacTomadas" type="number" min="0" value="0" onchange="limpiarSimulacion()">
+  <div class="ayuda">La fecha puede ser futura: sigue cobrando hasta ese día y la proyección lo saca después.</div>
+  <div class="botones"><button type="button" onclick="simular()">Ver liquidación final estimada</button></div>
+  <div id="simulacion"></div>
+  <div class="botones"><button class="principal" type="submit" id="confirmarBaja" disabled>Confirmar la baja</button><button type="button" onclick="google.script.host.close()">Cerrar</button></div>
+</form>
+
+<!-- AUMENTO -->
+<form id="aumento" class="oculto" onsubmit="return enviar(event, 'guardarAumento')">
+  <label>A quién</label>
+  <select name="legajo" onchange="cambioDestino(this.value)"></select>
+  <div id="destinoConvenio" class="oculto">
+    <label>Convenio</label>
+    <select name="convenio"></select>
+  </div>
+  <label>Desde el mes</label>
+  <input name="desde" type="month" required>
+  <div class="fila">
+    <div><label>Porcentaje</label><input name="porcentaje" type="number" step="0.01" placeholder="10 = 10%"></div>
+    <div><label>y/o monto fijo $</label><input name="monto" type="number" step="0.01"></div>
+  </div>
+  <div class="ayuda">Fuera de convenio: sube el básico (o el neto, si se pactó en neto). UOM: se suma a "a cuenta futuros aumentos", sobre el bruto del mes (el básico lo fija la escala).</div>
+  <label>Escenario <span class="ayuda">(opcional)</span></label>
+  <input name="escenario" list="escenarios" placeholder="Vacío = vale para todos">
+  <div class="ayuda">Con un nombre, el aumento solo cuenta en la proyección de ese escenario, para comparar.</div>
+  <label>Observaciones</label>
+  <input name="observaciones">
+  <div class="botones"><button class="principal" type="submit">Guardar aumento</button><button type="button" onclick="google.script.host.close()">Cerrar</button></div>
+</form>
+
+<datalist id="escenarios"></datalist>
+<div id="mensaje"></div>
+
+<script>
+  const MODO = document.body.dataset.modo;
+  const pesos = n => '$ ' + Number(n).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  let datos = null;
+
+  function opciones(select, lista, valor, texto) {
+    select.innerHTML = '';
+    for (const x of lista) {
+      const o = document.createElement('option');
+      o.value = valor ? valor(x) : x;
+      o.textContent = texto ? texto(x) : x;
+      select.appendChild(o);
+    }
+  }
+
+  function mostrar(texto, tipo) {
+    const m = document.getElementById('mensaje');
+    m.textContent = texto;
+    m.className = tipo;
+  }
+
+  function cambioConvenio(v) {
+    document.getElementById('soloUOM').classList.toggle('oculto', v !== 'UOM');
+    document.getElementById('soloFC').classList.toggle('oculto', v === 'UOM');
+  }
+
+  function cambioDestino(v) {
+    document.getElementById('destinoConvenio').classList.toggle('oculto', v !== '');
+  }
+
+  function limpiarSimulacion() {
+    document.getElementById('simulacion').innerHTML = '';
+    document.getElementById('confirmarBaja').disabled = true;
+  }
+
+  function valores(form) {
+    const o = {};
+    for (const el of form.elements) {
+      if (!el.name) continue;
+      o[el.name] = el.type === 'checkbox' ? (el.checked ? 'Sí' : 'No') : el.value;
+    }
+    return o;
+  }
+
+  function enviar(ev, funcion) {
+    ev.preventDefault();
+    const form = ev.target;
+    const botones = form.querySelectorAll('button');
+    botones.forEach(b => b.disabled = true);
+    mostrar('Guardando y recalculando…', 'ok');
+    google.script.run
+      .withSuccessHandler(r => {
+        mostrar(r.mensaje + '\n\n' + r.detalle + (r.avisos.length ? '\n\nAvisos:\n' + r.avisos.slice(0, 10).join('\n') : ''), 'ok');
+        botones.forEach(b => b.disabled = false);
+        if (MODO === 'baja') document.getElementById('confirmarBaja').disabled = true;
+        if (MODO !== 'baja') form.reset();
+        cargar();
+      })
+      .withFailureHandler(e => { mostrar(e.message, 'error'); botones.forEach(b => b.disabled = false); })[funcion](valores(form));
+    return false;
+  }
+
+  function simular() {
+    const f = valores(document.getElementById('baja'));
+    if (!f.legajo || !f.fecha) { mostrar('Elegí la persona y la fecha.', 'error'); return; }
+    mostrar('Calculando…', 'ok');
+    google.script.run
+      .withSuccessHandler(r => {
+        if (r.error) { mostrar(r.error, 'error'); return; }
+        document.getElementById('mensaje').className = '';
+        let h = '<table><tr><td colspan="2"><b>' + r.nombre + '</b> — ' + r.motivo + ' el ' + r.baja + '<br>' +
+          'Antigüedad: ' + Math.floor(r.meses / 12) + ' años y ' + (r.meses % 12) + ' meses' + (r.enPrueba ? ' (período de prueba)' : '') +
+          '<br>Mejor remuneración: ' + pesos(r.mejorRem) + '</td></tr>';
+        h += '<tr><td>Sueldo del mes (' + r.mesDias + ' días, neto)</td><td class="monto">' + pesos(r.mesNeto) + '</td></tr>';
+        for (const c of r.conceptos) h += '<tr><td>' + c[0] + (c[2] === 'N' ? ' <span class="ayuda">(no rem.)</span>' : '') + '</td><td class="monto">' + pesos(c[1]) + '</td></tr>';
+        h += '<tr class="total"><td>Liquidación final bruta</td><td class="monto">' + pesos(r.total) + '</td></tr>';
+        h += '<tr><td>Neto estimado (sin el sueldo del mes)</td><td class="monto">' + pesos(r.neto) + '</td></tr>';
+        h += '<tr><td>Costo para la empresa (con cargas)</td><td class="monto">' + pesos(r.costo) + '</td></tr></table>';
+        h += '<div class="ayuda">Estimación. La liquidación final la hace el estudio.</div>';
+        document.getElementById('simulacion').innerHTML = h;
+        document.getElementById('confirmarBaja').disabled = false;
+      })
+      .withFailureHandler(e => mostrar(e.message, 'error'))
+      .simularBajaFormulario(f);
+  }
+
+  function cargar() {
+    google.script.run.withSuccessHandler(d => {
+      datos = d;
+      const form = document.getElementById(MODO);
+      form.classList.remove('oculto');
+      opciones(document.getElementById('escenarios'), d.escenarios);
+      const persona = l => l.nombre + ' (' + l.legajo + ', ' + l.convenio + ')' + (l.baja ? ' — baja ' + l.baja : '');
+      if (MODO === 'alta') {
+        opciones(form.convenio, d.convenios);
+        opciones(form.categoria, d.categorias);
+        cambioConvenio(form.convenio.value);
+      } else if (MODO === 'baja') {
+        opciones(form.legajo, d.legajos, l => l.legajo, persona);
+        opciones(form.motivo, d.motivos);
+      } else {
+        opciones(form.legajo, [{ legajo: '', nombre: 'Todo un convenio' }].concat(d.legajos), l => l.legajo, l => l.legajo ? persona(l) : l.nombre);
+        opciones(form.convenio, d.convenios);
+        if (!form.desde.value) form.desde.value = d.siguientePeriodo;
+        cambioDestino(form.legajo.value);
+      }
+    }).withFailureHandler(e => mostrar(e.message, 'error')).datosFormulario();
+  }
+
+  cargar();
+</script>
+</body>
+</html>

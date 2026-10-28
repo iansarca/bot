@@ -19,6 +19,14 @@ const AUMENTO_ESCALA = 'Aumento de escala';
 const AUMENTO_ANTICIPO = 'Anticipo a cuenta';
 const AUMENTO_SUELDO = 'Aumento de sueldo';
 
+const ESCENARIO_BASE = 'Base';
+
+const MOTIVO_RENUNCIA = 'Renuncia';
+const MOTIVO_DESPIDO = 'Despido sin causa';
+const MOTIVO_CAUSA = 'Despido con causa';
+const MOTIVO_ACUERDO = 'Mutuo acuerdo';
+const MOTIVOS_BAJA = [MOTIVO_RENUNCIA, MOTIVO_DESPIDO, MOTIVO_CAUSA, MOTIVO_ACUERDO];
+
 const HOJAS = {
   instrucciones: 'Cómo se usa',
   parametros: 'Parámetros',
@@ -31,8 +39,11 @@ const HOJAS = {
   liquidacion: 'Liquidación',
   proyeccion: 'Proyección',
   resumen: 'Resumen',
+  escenarios: 'Escenarios',
   evolucion: 'Evolución',
   control: 'Control',
+  finales: 'Liquidaciones finales',
+  alertas: 'Alertas',
   recibo: 'Recibo',
 };
 
@@ -52,6 +63,12 @@ const COLUMNAS = {
     ['afiliado', 'Afiliado UOM', 'texto'],
     ['estado', 'Estado', 'texto'],
     ['baja', 'Fecha de baja', 'fecha'],
+    ['motivoBaja', 'Motivo de baja', 'texto'],
+    ['vacTomadas', 'Vacaciones tomadas en el año de la baja (días)', 'num'],
+    ['altaBasico', 'Alta: sueldo básico (fuera de conv.)', 'pesos'],
+    ['altaNeto', 'Alta: neto pactado (fuera de conv.)', 'pesos'],
+    ['altaACuenta', 'Alta: a cuenta futuros aumentos', 'pesos'],
+    ['escenario', 'Escenario (solo proyección)', 'texto'],
     ['observaciones', 'Observaciones', 'texto'],
   ],
   escala: [
@@ -83,8 +100,11 @@ const COLUMNAS = {
   aumentos: [
     ['desde', 'Desde período', 'periodo'],
     ['convenio', 'Convenio', 'texto'],
+    ['legajo', 'Legajo (vacío = todos)', 'texto'],
     ['tipo', 'Tipo', 'texto'],
     ['porcentaje', 'Porcentaje', 'porc'],
+    ['monto', 'Monto fijo', 'pesos'],
+    ['escenario', 'Escenario (vacío = todos)', 'texto'],
     ['observaciones', 'Observaciones', 'texto'],
   ],
   planilla: [
@@ -100,6 +120,7 @@ const COLUMNAS = {
 const COLUMNAS_LIQ = [
   ['periodo', 'Período', 'periodo'],
   ['tipo', 'Tipo', 'texto'],
+  ['escenario', 'Escenario', 'texto'],
   ['legajo', 'Legajo', 'texto'],
   ['nombre', 'Empleado', 'texto'],
   ['convenio', 'Convenio', 'texto'],
@@ -122,6 +143,7 @@ const COLUMNAS_LIQ = [
   ['fijoUOM', 'Aporte fijo UOM', 'pesos'],
   ['aportes', 'Total aportes', 'pesos'],
   ['descuentos', 'Otros descuentos', 'pesos'],
+  ['final', 'Liquidación final (estimada)', 'pesos'],
   ['neto', 'Neto a cobrar', 'pesos'],
   ['netoSinSAC', 'Neto sin SAC', 'pesos'],
   ['contribuciones', 'Contribuciones patronales', 'pesos'],
@@ -149,8 +171,11 @@ const PARAMETROS_DEFECTO = [
   ['ART_FIJO', 1827, 'ART: monto fijo por persona por mes.'],
   ['SEGURO_VIDA_OBLIGATORIO', 425, 'Seguro colectivo de vida obligatorio, por persona por mes.'],
   ['DIAS_MES', 30, 'Días del mes para calcular los proporcionales (ingresos y egresos).'],
+  ['PROPORCIONAL_ALTAS_BAJAS', 'Sí', 'Sí: en el mes de ingreso o de baja se paga solo por los días trabajados (si no se cargan los días a mano).'],
   ['SAC_AUTOMATICO', 'Sí', 'Sí: en junio y diciembre se calcula el aguinaldo solo.'],
   ['ABSORBER_ANTICIPO', 'Sí', 'Sí: cuando sube el básico de la escala, el anticipo absorbible baja en lo mismo que subió.'],
+  ['PERIODO_PRUEBA_MESES', 6, 'Duración del período de prueba (meses). Un despido dentro de ese plazo no lleva indemnización.'],
+  ['DIVISOR_VACACIONES', 25, 'Divisor del sueldo mensual para el valor del día de vacaciones.'],
   ['PROYECTAR_HASTA', '2027-04', 'Último mes de la proyección (aaaa-mm).'],
 ];
 
@@ -208,6 +233,14 @@ function fecha(v) {
   return null;
 }
 
+function fechaCorta(f) {
+  return f ? dos(f.d) + '/' + dos(f.m) + '/' + f.y : '';
+}
+
+function periodoDe(f) {
+  return f.y + '-' + dos(f.m);
+}
+
 function sumarMeses(p, n) {
   const y = Number(p.slice(0, 4)), m = Number(p.slice(5, 7)) - 1 + n;
   const yy = y + Math.floor(m / 12), mm = ((m % 12) + 12) % 12;
@@ -223,13 +256,24 @@ function diaNumero(f) {
   return Math.round(Date.UTC(f.y, f.m - 1, f.d) / 86400000);
 }
 
+/** Años cumplidos desde el ingreso hasta una fecha. */
+function aniosHasta(ingreso, f) {
+  if (!ingreso) return 0;
+  let a = f.y - ingreso.y;
+  if (f.m < ingreso.m || (f.m === ingreso.m && f.d < ingreso.d)) a--;
+  return Math.max(0, a);
+}
+
 /** Años cumplidos desde el ingreso al último día del período. */
 function aniosCumplidos(ingreso, p) {
-  if (!ingreso) return 0;
-  const fin = ultimoDia(p);
-  let a = fin.y - ingreso.y;
-  if (fin.m < ingreso.m || (fin.m === ingreso.m && fin.d < ingreso.d)) a--;
-  return Math.max(0, a);
+  return aniosHasta(ingreso, ultimoDia(p));
+}
+
+/** Meses completos entre el ingreso y una fecha. */
+function mesesHasta(ingreso, f) {
+  let m = (f.y - ingreso.y) * 12 + (f.m - ingreso.m);
+  if (f.d < ingreso.d) m--;
+  return Math.max(0, m);
 }
 
 /** Última fila con desde <= p que cumple el filtro (las filas vienen ordenadas por desde). */
@@ -249,6 +293,11 @@ function esMesSAC(p) {
   return m === '06' || m === '12';
 }
 
+/** Una fila con escenario vacío vale para todos; con nombre, solo para ese escenario. */
+function aplicaEscenario(escenarioFila, esc) {
+  return !escenarioFila || escenarioFila === esc;
+}
+
 // --- Lectura de los datos crudos ----------------------------------------------
 
 function leerParametros(filas) {
@@ -261,8 +310,10 @@ function leerParametros(filas) {
   const numericos = PARAMETROS_DEFECTO.filter(d => typeof d[1] === 'number').map(d => d[0]);
   for (const k of numericos) p[k] = num(p[k]);
   if (!(p.DIAS_MES > 0)) p.DIAS_MES = 30;
+  if (!(p.DIVISOR_VACACIONES > 0)) p.DIVISOR_VACACIONES = 25;
   p.SAC_AUTOMATICO = siNo(p.SAC_AUTOMATICO, true);
   p.ABSORBER_ANTICIPO = siNo(p.ABSORBER_ANTICIPO, true);
+  p.PROPORCIONAL_ALTAS_BAJAS = siNo(p.PROPORCIONAL_ALTAS_BAJAS, true);
   p.PROYECTAR_HASTA = periodo(p.PROYECTAR_HASTA);
   p.EMPRESA = texto(p.EMPRESA);
   return p;
@@ -270,7 +321,8 @@ function leerParametros(filas) {
 
 function normalizarConvenio(v) {
   const s = texto(v).toLowerCase();
-  if (s === 'uom' || s.indexOf('uom') === 0) return CONVENIO_UOM;
+  if (!s) return '';
+  if (s.indexOf('uom') === 0) return CONVENIO_UOM;
   return CONVENIO_FC;
 }
 
@@ -289,6 +341,21 @@ function normalizarTipoAumento(v) {
   return '';
 }
 
+function normalizarMotivo(v) {
+  const s = texto(v).toLowerCase();
+  if (!s) return '';
+  if (s.indexOf('renuncia') >= 0) return MOTIVO_RENUNCIA;
+  if (s.indexOf('con causa') >= 0) return MOTIVO_CAUSA;
+  if (s.indexOf('despido') >= 0 || s.indexOf('sin causa') >= 0) return MOTIVO_DESPIDO;
+  if (s.indexOf('acuerdo') >= 0) return MOTIVO_ACUERDO;
+  return MOTIVO_RENUNCIA;
+}
+
+function normalizarEscenario(v) {
+  const s = texto(v);
+  return s.toLowerCase() === ESCENARIO_BASE.toLowerCase() ? ESCENARIO_BASE : s;
+}
+
 function porDesde(a, b) {
   return a.desde < b.desde ? -1 : a.desde > b.desde ? 1 : 0;
 }
@@ -302,9 +369,11 @@ function prepararDatos(crudo) {
   for (const f of crudo.legajos || []) {
     const id = texto(f.legajo);
     if (!id) continue;
-    if (legajos.has(id)) avisos.push('Legajo repetido: ' + id + '. Se usa la primera fila.');
-    if (legajos.has(id)) continue;
-    const convenio = normalizarConvenio(f.convenio);
+    if (legajos.has(id)) {
+      avisos.push('Legajo repetido: ' + id + '. Se usa la primera fila.');
+      continue;
+    }
+    const convenio = normalizarConvenio(f.convenio) || CONVENIO_FC;
     const leg = {
       legajo: id,
       nombre: texto(f.nombre),
@@ -317,8 +386,15 @@ function prepararDatos(crudo) {
       afiliado: convenio === CONVENIO_UOM && siNo(f.afiliado, true),
       activo: texto(f.estado).toLowerCase() !== 'baja',
       baja: fecha(f.baja),
+      motivoBaja: normalizarMotivo(f.motivoBaja),
+      vacTomadas: num(f.vacTomadas),
+      altaBasico: num(f.altaBasico),
+      altaNeto: num(f.altaNeto),
+      altaACuenta: num(f.altaACuenta),
+      escenario: normalizarEscenario(f.escenario),
     };
     if (!leg.ingreso) avisos.push('Legajo ' + id + ' (' + leg.nombre + ') no tiene fecha de ingreso: no se calcula antigüedad.');
+    if (leg.baja && leg.ingreso && diaNumero(leg.baja) < diaNumero(leg.ingreso)) avisos.push('Legajo ' + id + ': la fecha de baja es anterior al ingreso.');
     legajos.set(id, leg);
   }
 
@@ -358,23 +434,40 @@ function prepararDatos(crudo) {
   for (const f of crudo.aumentos || []) {
     const desde = periodo(f.desde);
     if (!desde) continue;
-    const convenio = normalizarConvenio(f.convenio);
+    const legajo = texto(f.legajo);
     const tipo = normalizarTipoAumento(f.tipo);
-    const pct = num(f.porcentaje);
-    const valido = convenio === CONVENIO_UOM ? tipo === AUMENTO_ESCALA || tipo === AUMENTO_ANTICIPO : tipo === AUMENTO_SUELDO;
-    if (!valido) {
-      avisos.push('Aumentos previstos ' + desde + ': el tipo "' + texto(f.tipo) + '" no corresponde a ' + convenio + '. Se ignora.');
+    const donde = 'Aumentos previstos ' + desde + (legajo ? ' (' + legajo + ')' : '') + ': ';
+    if (legajo && !legajos.has(legajo)) {
+      avisos.push(donde + 'el legajo no está en la hoja Legajos. Se ignora.');
       continue;
     }
-    aumentos.push({ desde: desde, convenio: convenio, tipo: tipo, porcentaje: pct });
+    const convenio = legajo ? legajos.get(legajo).convenio : normalizarConvenio(f.convenio);
+    if (!convenio) {
+      avisos.push(donde + 'falta el convenio o el legajo. Se ignora.');
+      continue;
+    }
+    let error = '';
+    if (!tipo) error = 'el tipo "' + texto(f.tipo) + '" no se entiende';
+    else if (tipo === AUMENTO_ESCALA && (legajo || convenio !== CONVENIO_UOM)) error = 'el aumento de escala es para todo UOM, sin legajo';
+    else if (tipo === AUMENTO_ANTICIPO && convenio !== CONVENIO_UOM) error = 'el anticipo a cuenta es solo para UOM';
+    if (error) {
+      avisos.push(donde + error + '. Se ignora.');
+      continue;
+    }
+    aumentos.push({ desde: desde, convenio: convenio, legajo: legajo, tipo: tipo, porcentaje: num(f.porcentaje), monto: num(f.monto), escenario: normalizarEscenario(f.escenario) });
   }
   aumentos.sort(porDesde);
+
+  const nombres = new Set([ESCENARIO_BASE]);
+  for (const a of aumentos) if (a.escenario) nombres.add(a.escenario);
+  for (const l of legajos.values()) if (l.escenario) nombres.add(l.escenario);
+  const escenarios = Array.from(nombres);
 
   const planilla = (crudo.planilla || [])
     .map(f => ({ periodo: periodo(f.periodo), legajo: texto(f.legajo), nombre: texto(f.nombre), bruto: num(f.bruto), neto: num(f.neto) }))
     .filter(f => f.periodo && f.legajo);
 
-  return { p, legajos, escala, topes, novedades, aumentos, planilla, avisos };
+  return { p, legajos, escala, topes, novedades, aumentos, escenarios, planilla, avisos };
 }
 
 function normalizarNovedad(f, per, id) {
@@ -392,6 +485,119 @@ function normalizarNovedad(f, per, id) {
     dias: num(f.dias),
     sac: 0,
     observaciones: texto(f.observaciones),
+  };
+}
+
+// --- Vigencia, altas y bajas -------------------------------------------------------------
+
+/**
+ * Si la persona trabaja en el período. esc: escenario de la proyección, o null
+ * para los meses reales (ahí no entran las altas hipotéticas de un escenario).
+ */
+function legajoVigente(leg, per, esc) {
+  if (leg.escenario && leg.escenario !== esc) return false;
+  const ini = diaNumero({ y: Number(per.slice(0, 4)), m: Number(per.slice(5, 7)), d: 1 });
+  if (leg.ingreso && diaNumero(leg.ingreso) > diaNumero(ultimoDia(per))) return false;
+  if (leg.baja) return diaNumero(leg.baja) >= ini;
+  return leg.activo;
+}
+
+/** Días a pagar en el mes según ingreso y baja (mes de 30 días). */
+function diasDelMes(leg, per, p) {
+  const u = ultimoDia(per);
+  let ini = 1, fin = p.DIAS_MES;
+  if (leg.ingreso && leg.ingreso.y === u.y && leg.ingreso.m === u.m) ini = Math.min(leg.ingreso.d, p.DIAS_MES);
+  if (leg.baja && leg.baja.y === u.y && leg.baja.m === u.m) fin = leg.baja.d >= u.d ? p.DIAS_MES : Math.min(leg.baja.d, p.DIAS_MES);
+  return Math.max(0, fin - ini + 1);
+}
+
+function bajaEnPeriodo(leg, per) {
+  return !!leg.baja && periodoDe(leg.baja) === per;
+}
+
+/** Novedad del primer mes de una persona, con los importes de alta del legajo. */
+function novedadDeAlta(leg, per) {
+  const n = normalizarNovedad({ basico: leg.altaBasico, netoPactado: leg.altaNeto, aCuenta: leg.altaACuenta }, per, leg.legajo);
+  if (leg.convenio === CONVENIO_FC && !leg.altaBasico && !leg.altaNeto) n.observaciones = 'Nuevo: completar el sueldo.';
+  return n;
+}
+
+function diasVacaciones(anios) {
+  return anios < 5 ? 14 : anios < 10 ? 21 : anios < 20 ? 28 : 35;
+}
+
+/**
+ * Estimación de la liquidación final (importes brutos).
+ * info: { remMensual, mejorRem12, mejorRemSemestre, sacYaPagado }
+ */
+function liquidacionFinal(leg, info, p) {
+  const baja = leg.baja, motivo = leg.motivoBaja || MOTIVO_RENUNCIA;
+  const ingreso = leg.ingreso || baja;
+  const meses = mesesHasta(ingreso, baja);
+  const anios = Math.floor(meses / 12) + leg.aniosReconocidos;
+  const rem = info.remMensual;
+  const enPrueba = meses < p.PERIODO_PRUEBA_MESES;
+  const c = [];
+  const agregar = (nombre, monto, tipo) => { if (monto > 0) c.push([nombre, r2(monto), tipo]); };
+
+  // Aguinaldo proporcional del semestre (salvo que ya se pague en junio o diciembre).
+  if (!info.sacYaPagado) {
+    const semIni = { y: baja.y, m: baja.m <= 6 ? 1 : 7, d: 1 };
+    const semFin = { y: baja.y, m: baja.m <= 6 ? 6 : 12, d: baja.m <= 6 ? 30 : 31 };
+    const desde = Math.max(diaNumero(semIni), diaNumero(ingreso));
+    const fraccion = Math.max(0, diaNumero(baja) - desde + 1) / (diaNumero(semFin) - diaNumero(semIni) + 1);
+    agregar('SAC proporcional', (info.mejorRemSemestre / 2) * fraccion, 'R');
+  }
+
+  // Vacaciones no gozadas, proporcionales a lo trabajado en el año.
+  const inicioAnio = Math.max(diaNumero({ y: baja.y, m: 1, d: 1 }), diaNumero(ingreso));
+  const trabajadosAnio = Math.max(0, diaNumero(baja) - inicioAnio + 1);
+  const diasVac = Math.max(0, (diasVacaciones(aniosHasta(ingreso, { y: baja.y, m: 12, d: 31 }) + leg.aniosReconocidos) * trabajadosAnio) / 365 - leg.vacTomadas);
+  const vac = (rem / p.DIVISOR_VACACIONES) * diasVac;
+  agregar('Vacaciones no gozadas (' + Math.round(diasVac * 10) / 10 + ' días)', vac, 'N');
+  agregar('SAC sobre vacaciones no gozadas', vac / 12, 'N');
+
+  if (motivo === MOTIVO_DESPIDO) {
+    if (enPrueba) {
+      agregar('Preaviso (15 días, período de prueba)', rem / 2, 'R');
+      agregar('SAC sobre preaviso', rem / 2 / 12, 'R');
+    } else {
+      const aniosIndem = Math.max(1, Math.floor(meses / 12) + (meses % 12 > 3 ? 1 : 0) + leg.aniosReconocidos);
+      agregar('Indemnización por antigüedad (' + aniosIndem + ' × mejor remuneración)', info.mejorRem12 * aniosIndem, 'N');
+      const mesesPreaviso = anios >= 5 ? 2 : 1;
+      agregar('Preaviso (' + mesesPreaviso + (mesesPreaviso > 1 ? ' meses)' : ' mes)'), rem * mesesPreaviso, 'R');
+      agregar('SAC sobre preaviso', (rem * mesesPreaviso) / 12, 'R');
+      const u = ultimoDia(periodoDe(baja));
+      if (baja.d < u.d) {
+        const integ = (rem * (p.DIAS_MES - Math.min(baja.d, p.DIAS_MES))) / p.DIAS_MES;
+        agregar('Integración mes de despido', integ, 'R');
+        agregar('SAC sobre integración', integ / 12, 'R');
+      }
+    }
+  }
+
+  const t = tasasAportes(leg, p);
+  const remItems = c.filter(x => x[2] === 'R').reduce((s, x) => s + x[1], 0);
+  const noRemItems = c.filter(x => x[2] === 'N').reduce((s, x) => s + x[1], 0);
+  const total = r2(remItems + noRemItems);
+  const aportes = r2(remItems * (t.jub + t.pami + t.os + t.sind));
+  const contribuciones = leg.regimen === REGIMEN_SIN ? 0 : r2(remItems * (tasaContribuciones(p) + p.ART_VARIABLE));
+  return {
+    legajo: leg.legajo,
+    nombre: leg.nombre,
+    baja: baja,
+    motivo: motivo,
+    meses: meses,
+    enPrueba: enPrueba,
+    mejorRem: r2(info.mejorRem12),
+    conceptos: c,
+    remunerativo: r2(remItems),
+    noRemunerativo: r2(noRemItems),
+    total: total,
+    aportes: aportes,
+    neto: r2(total - aportes),
+    contribuciones: contribuciones,
+    costo: r2(total + contribuciones),
   };
 }
 
@@ -436,7 +642,7 @@ function brutoDesdeNeto(neto, t, tope) {
 function liquidar(leg, nov, ctx) {
   const p = ctx.p, per = nov.periodo, obs = [];
   const esUOM = leg.convenio === CONVENIO_UOM;
-  const dias = nov.dias > 0 ? Math.min(nov.dias, p.DIAS_MES) : p.DIAS_MES;
+  const dias = nov.dias > 0 ? Math.min(nov.dias, p.DIAS_MES) : p.PROPORCIONAL_ALTAS_BAJAS ? diasDelMes(leg, per, p) : p.DIAS_MES;
   const prop = dias / p.DIAS_MES;
   const anios = esUOM && leg.ingreso ? aniosCumplidos(leg.ingreso, per) + leg.aniosReconocidos : 0;
   const t = tasasAportes(leg, p);
@@ -455,6 +661,7 @@ function liquidar(leg, nov, ctx) {
   const r = {
     periodo: per,
     tipo: nov.tipo || 'Real',
+    escenario: nov.escenario || '',
     legajo: leg.legajo,
     nombre: leg.nombre,
     convenio: leg.convenio,
@@ -470,6 +677,7 @@ function liquidar(leg, nov, ctx) {
     noRem: r2(nov.noRem),
     descuentos: r2(nov.descuentos),
     sac: r2(nov.sac || 0),
+    final: 0,
   };
 
   if (!esUOM && nov.netoPactado > 0) {
@@ -510,17 +718,17 @@ function liquidar(leg, nov, ctx) {
   r.costo = r2(masa + r.noRem + r.contribuciones + r.art);
 
   if (tope && r.remunerativo > tope) obs.push('Aportes con tope (' + tope + ').');
-  if (leg.ingreso && diaNumero(leg.ingreso) > diaNumero(ultimoDia(per))) obs.push('La fecha de ingreso es posterior al período.');
+  if (dias < p.DIAS_MES && !(nov.dias > 0)) obs.push('Proporcional: ' + dias + ' días.');
   if (nov.observaciones) obs.push(nov.observaciones);
   r.observaciones = obs.join(' ');
   return r;
 }
 
-// --- Aguinaldo -----------------------------------------------------------------------
+// --- Aguinaldo y liquidación final -------------------------------------------------------
 
 /**
  * SAC del semestre que termina en p (junio o diciembre): 50% de la mejor
- * remuneración mensual del semestre, proporcional si entró durante el semestre.
+ * remuneración mensual del semestre, proporcional si entró o se fue durante el semestre.
  * remPorPeriodo: { 'aaaa-mm': total remunerativo } de la persona.
  */
 function calcularSAC(leg, p, remPorPeriodo) {
@@ -531,23 +739,87 @@ function calcularSAC(leg, p, remPorPeriodo) {
   const ini = diaNumero({ y: y, m: Number(primero.slice(5, 7)), d: 1 });
   const fin = diaNumero(ultimoDia(p));
   const desde = leg.ingreso ? Math.max(ini, diaNumero(leg.ingreso)) : ini;
-  const fraccion = Math.max(0, fin - desde + 1) / (fin - ini + 1);
+  const hasta = leg.baja ? Math.min(fin, diaNumero(leg.baja)) : fin;
+  const fraccion = Math.max(0, hasta - desde + 1) / (fin - ini + 1);
   return r2((mejor / 2) * fraccion);
 }
 
+function mejorEntre(hist, desde, hasta) {
+  let mejor = 0;
+  for (let m = desde; m <= hasta; m = sumarMeses(m, 1)) mejor = Math.max(mejor, hist[m] || 0);
+  return mejor;
+}
+
 /**
- * Liquida una novedad agregando el SAC si corresponde.
- * remHist: Map legajo -> { periodo: remunerativo }, se va completando.
+ * Liquida una novedad agregando el SAC y, si se va en el mes, la liquidación final.
+ * remHist: Map legajo -> { periodo: remunerativo de mes completo }, se va completando.
  */
 function liquidarConSAC(leg, nov, ctx, remHist) {
+  const p = ctx.p;
   let r = liquidar(leg, nov, ctx);
   if (!remHist.has(leg.legajo)) remHist.set(leg.legajo, {});
-  remHist.get(leg.legajo)[nov.periodo] = r.remunerativo;
-  if (ctx.p.SAC_AUTOMATICO && esMesSAC(nov.periodo)) {
-    const sac = calcularSAC(leg, nov.periodo, remHist.get(leg.legajo));
+  const hist = remHist.get(leg.legajo);
+  // Para el aguinaldo y la indemnización cuenta la remuneración de un mes completo.
+  const mesCompleto = r.dias > 0 && r.dias < p.DIAS_MES ? r2(r.remunerativo * p.DIAS_MES / r.dias) : r.remunerativo;
+  hist[nov.periodo] = r.dias > 0 ? mesCompleto : hist[sumarMeses(nov.periodo, -1)] || 0;
+  const sacDelMes = p.SAC_AUTOMATICO && esMesSAC(nov.periodo);
+  if (sacDelMes) {
+    const sac = calcularSAC(leg, nov.periodo, hist);
     if (sac > 0) r = liquidar(leg, Object.assign({}, nov, { sac: sac }), ctx);
   }
+  if (bajaEnPeriodo(leg, nov.periodo) && leg.motivoBaja) {
+    const per = nov.periodo;
+    const semIni = per.slice(0, 5) + (Number(per.slice(5, 7)) <= 6 ? '01' : '07');
+    const fin = liquidacionFinal(leg, {
+      remMensual: hist[per],
+      mejorRem12: mejorEntre(hist, sumarMeses(per, -11), per),
+      mejorRemSemestre: mejorEntre(hist, semIni, per),
+      sacYaPagado: sacDelMes,
+    }, p);
+    fin.periodo = per;
+    fin.escenario = r.escenario;
+    fin.tipo = r.tipo;
+    r.final = fin.total;
+    r.neto = r2(r.neto + fin.neto);
+    r.costo = r2(r.costo + fin.costo);
+    r.observaciones = (r.observaciones ? r.observaciones + ' ' : '') + 'Baja ' + fechaCorta(leg.baja) + ' (' + fin.motivo + '): liquidación final estimada.';
+    r._final = fin;
+  }
   return r;
+}
+
+// --- Aumentos -------------------------------------------------------------------------
+
+/**
+ * Aplica a la novedad los aumentos de sueldo y anticipos del mes que le tocan a la persona
+ * (los de su legajo y los generales de su convenio). Los de escala van por la escala.
+ * UOM: el porcentaje se calcula sobre el bruto del mes anterior y va a "a cuenta" (o al
+ * anticipo). Fuera de convenio: sube el básico, o el neto pactado si se pactó en neto.
+ */
+function aplicarAumentos(n, leg, lista, remAnterior) {
+  const aplicados = [];
+  for (const a of lista) {
+    if (a.tipo === AUMENTO_ESCALA) continue;
+    if (a.legajo ? a.legajo !== leg.legajo : a.convenio !== leg.convenio) continue;
+    if (leg.convenio === CONVENIO_UOM) {
+      const extra = r2((remAnterior || 0) * a.porcentaje + a.monto);
+      if (a.tipo === AUMENTO_ANTICIPO) n.anticipo = r2(n.anticipo + extra);
+      else n.aCuenta = r2(n.aCuenta + extra);
+    } else if (n.netoPactado > 0) {
+      n.netoPactado = r2(n.netoPactado * (1 + a.porcentaje) + a.monto);
+    } else {
+      n.basico = r2(n.basico * (1 + a.porcentaje) + a.monto);
+    }
+    aplicados.push(a);
+  }
+  return aplicados;
+}
+
+function describirAumento(a) {
+  const partes = [];
+  if (a.porcentaje) partes.push(String(Math.round(a.porcentaje * 10000) / 100).replace('.', ',') + '%');
+  if (a.monto) partes.push('$' + a.monto);
+  return a.tipo + ' ' + partes.join(' + ');
 }
 
 // --- Meses reales, preparar mes siguiente y proyección -----------------------------
@@ -560,12 +832,6 @@ function liquidarReales(d) {
 
 function ultimoPeriodo(novedades) {
   return novedades.reduce((max, n) => (n.periodo > max ? n.periodo : max), '');
-}
-
-function legajoVigente(leg, per) {
-  if (!leg.activo) return false;
-  if (leg.ingreso && diaNumero(leg.ingreso) > diaNumero(ultimoDia(per))) return false;
-  return true;
 }
 
 /** Diferencia del básico de escala entre un mes y el anterior (0 si no hay escala). */
@@ -594,56 +860,74 @@ function arrastrarNovedad(prev, per) {
   };
 }
 
-/**
- * Novedades del mes siguiente al último cargado, para los legajos activos.
- * Copia básico, neto pactado, a cuenta y anticipo del mes anterior; si subió
- * la escala UOM descuenta la suba del anticipo absorbible.
- */
-function prepararMes(d) {
-  const ult = ultimoPeriodo(d.novedades);
-  if (!ult) return { periodo: '', filas: [] };
-  const per = sumarMeses(ult, 1);
-  const previas = new Map(d.novedades.filter(n => n.periodo === ult).map(n => [n.legajo, n]));
-  const filas = [];
-  for (const leg of d.legajos.values()) {
-    if (!legajoVigente(leg, per)) continue;
-    const prev = previas.get(leg.legajo);
-    const n = prev ? arrastrarNovedad(prev, per) : normalizarNovedad({}, per, leg.legajo);
-    if (!prev) n.observaciones = 'Nuevo: completar.';
-    if (leg.convenio === CONVENIO_UOM && d.p.ABSORBER_ANTICIPO && n.anticipo > 0) {
-      const suba = subaEscala(d.escala, leg.categoria, per);
-      if (suba > 0) n.anticipo = r2(Math.max(0, n.anticipo - suba));
-    }
-    n.nombre = leg.nombre;
-    filas.push(n);
+/** Novedad del mes siguiente para una persona: arrastra, absorbe anticipo y aplica aumentos. */
+function novedadSiguiente(leg, prev, per, escala, aumentosDelMes, remAnterior, p) {
+  const n = prev ? arrastrarNovedad(prev, per) : novedadDeAlta(leg, per);
+  if (leg.convenio === CONVENIO_UOM && p.ABSORBER_ANTICIPO && n.anticipo > 0) {
+    const suba = subaEscala(escala, leg.categoria, per);
+    if (suba > 0) n.anticipo = r2(Math.max(0, n.anticipo - suba));
   }
-  return { periodo: per, filas: filas };
+  const aplicados = aplicarAumentos(n, leg, aumentosDelMes, remAnterior);
+  if (aplicados.length) n.observaciones = (n.observaciones ? n.observaciones + ' ' : '') + aplicados.map(describirAumento).join('; ') + '.';
+  return n;
 }
 
 /**
- * Proyecta desde el mes siguiente al último real hasta PROYECTAR_HASTA,
- * aplicando la hoja Aumentos previstos.
+ * Novedades del mes siguiente al último cargado, para los legajos activos.
+ * Copia lo fijo del mes anterior (o los importes de alta si es nuevo), descuenta del
+ * anticipo la suba de escala y aplica los aumentos previstos del escenario Base.
  */
-function proyectar(d, reales) {
+function prepararMes(d) {
+  const ult = ultimoPeriodo(d.novedades);
+  if (!ult) return { periodo: '', filas: [], avisos: [] };
+  const per = sumarMeses(ult, 1);
+  const avisos = [];
+  const previas = new Map(d.novedades.filter(n => n.periodo === ult).map(n => [n.legajo, n]));
+  const remAnterior = new Map(liquidarReales(d).filter(r => r.periodo === ult).map(r => [r.legajo, r.remunerativo]));
+  const delMes = d.aumentos.filter(a => a.desde === per && aplicaEscenario(a.escenario, ESCENARIO_BASE));
+  const escalaPrevista = delMes.some(a => a.tipo === AUMENTO_ESCALA);
+  if (escalaPrevista && !d.escala.some(e => e.desde === per)) {
+    avisos.push('Hay un aumento de escala previsto para ' + per + ' pero no está en la hoja Escala UOM: cargalo ahí para que se aplique.');
+  }
+  const filas = [];
+  for (const leg of d.legajos.values()) {
+    if (!legajoVigente(leg, per, null)) continue;
+    const n = novedadSiguiente(leg, previas.get(leg.legajo), per, d.escala, delMes, remAnterior.get(leg.legajo), d.p);
+    n.nombre = leg.nombre;
+    filas.push(n);
+  }
+  return { periodo: per, filas: filas, avisos: avisos };
+}
+
+/**
+ * Proyecta un escenario desde el mes siguiente al último real hasta PROYECTAR_HASTA,
+ * aplicando los aumentos previstos y las altas y bajas con fecha.
+ */
+function proyectar(d, reales, esc) {
+  esc = esc || ESCENARIO_BASE;
   const desde = ultimoPeriodo(d.novedades), hasta = d.p.PROYECTAR_HASTA;
   if (!desde || !hasta || hasta <= desde) return [];
 
   const escala = d.escala.slice();
+  const aumentos = d.aumentos.filter(a => aplicaEscenario(a.escenario, esc));
   const categorias = Array.from(new Set(Array.from(d.legajos.values()).filter(l => l.convenio === CONVENIO_UOM).map(l => l.categoria)));
   const ctx = { p: d.p, escala: escala, topes: d.topes };
 
   const remHist = new Map();
   for (const r of reales) {
     if (!remHist.has(r.legajo)) remHist.set(r.legajo, {});
-    remHist.get(r.legajo)[r.periodo] = r.remunerativo;
+    remHist.get(r.legajo)[r.periodo] = r.dias > 0 && r.dias < d.p.DIAS_MES ? r2(r.remunerativo * d.p.DIAS_MES / r.dias) : r.remunerativo;
   }
 
   let actuales = new Map(d.novedades.filter(n => n.periodo === desde).map(n => [n.legajo, n]));
+  const conHistoria = new Set(d.novedades.map(n => n.legajo));
   const remAnterior = new Map(reales.filter(r => r.periodo === desde).map(r => [r.legajo, r.remunerativo]));
   const filas = [];
 
-  for (let per = sumarMeses(desde, 1); per <= hasta; per = sumarMeses(per, 1)) {
-    const delMes = d.aumentos.filter(a => a.desde === per);
+  const primero = sumarMeses(desde, 1);
+  for (let per = primero; per <= hasta; per = sumarMeses(per, 1)) {
+    // Un aumento de un escenario con fecha en un mes ya cargado se aplica en el primer mes proyectado.
+    const delMes = aumentos.filter(a => a.desde === per || (per === primero && a.desde < per && a.escenario && a.escenario !== ESCENARIO_BASE));
 
     // Escala del mes: si ya hay una fila real se respeta; si no, se aplica el aumento previsto.
     for (const cat of categorias) {
@@ -659,26 +943,16 @@ function proyectar(d, reales) {
 
     const siguientes = new Map();
     for (const leg of d.legajos.values()) {
-      if (!legajoVigente(leg, per)) continue;
+      if (!legajoVigente(leg, per, esc)) continue;
       const prev = actuales.get(leg.legajo);
-      if (!prev) continue; // sin datos del último mes real no hay de dónde proyectar
-      const n = arrastrarNovedad(prev, per);
+      // Sin datos del mes anterior solo se proyecta un alta nueva: ingresa después del último
+      // mes cargado o tiene los importes de alta. Si no, faltan datos y no se inventan.
+      const esAlta = !conHistoria.has(leg.legajo) &&
+        ((leg.ingreso && periodoDe(leg.ingreso) > desde) || leg.altaBasico > 0 || leg.altaNeto > 0 || leg.altaACuenta > 0);
+      if (!prev && !esAlta) continue;
+      const n = novedadSiguiente(leg, prev, per, escala, delMes, remAnterior.get(leg.legajo), d.p);
       n.tipo = 'Proyectado';
-      if (leg.convenio === CONVENIO_UOM) {
-        if (d.p.ABSORBER_ANTICIPO && n.anticipo > 0) {
-          const suba = subaEscala(escala, leg.categoria, per);
-          if (suba > 0) n.anticipo = r2(Math.max(0, n.anticipo - suba));
-        }
-        for (const a of delMes) {
-          if (a.convenio === CONVENIO_UOM && a.tipo === AUMENTO_ANTICIPO) n.anticipo = r2(n.anticipo + (remAnterior.get(leg.legajo) || 0) * a.porcentaje);
-        }
-      } else {
-        for (const a of delMes) {
-          if (a.convenio !== CONVENIO_FC) continue;
-          if (n.netoPactado > 0) n.netoPactado = r2(n.netoPactado * (1 + a.porcentaje));
-          else n.basico = r2(n.basico * (1 + a.porcentaje));
-        }
-      }
+      n.escenario = esc;
       const r = liquidarConSAC(leg, n, ctx, remHist);
       filas.push(r);
       siguientes.set(leg.legajo, n);
@@ -701,15 +975,14 @@ function tablaDesdeObjetos(columnas, objetos) {
 
 function tablaResumen(filas) {
   const grupos = new Map();
-  const clave = (per, tipo, conv) => per + '|' + tipo + '|' + conv;
   for (const r of filas) {
     for (const conv of [r.convenio, 'Total']) {
-      const k = clave(r.periodo, r.tipo, conv);
-      if (!grupos.has(k)) grupos.set(k, { periodo: r.periodo, tipo: r.tipo, convenio: conv, personas: 0, remunerativo: 0, sac: 0, noRem: 0, aportes: 0, neto: 0, cargas: 0, costo: 0 });
+      const k = r.periodo + '|' + r.escenario + '|' + conv;
+      if (!grupos.has(k)) grupos.set(k, { periodo: r.periodo, tipo: r.tipo, escenario: r.escenario, convenio: conv, personas: 0, remunerativo: 0, sac: 0, noRem: 0, aportes: 0, neto: 0, cargas: 0, costo: 0 });
       const g = grupos.get(k);
       g.personas++;
       g.remunerativo += r.remunerativo;
-      g.sac += r.sac;
+      g.sac += r.sac + r.final;
       g.noRem += r.noRem;
       g.aportes += r.aportes;
       g.neto += r.neto;
@@ -718,18 +991,63 @@ function tablaResumen(filas) {
     }
   }
   const orden = { [CONVENIO_UOM]: 0, [CONVENIO_FC]: 1, Total: 2 };
-  const lista = Array.from(grupos.values()).sort((a, b) => (a.periodo !== b.periodo ? (a.periodo < b.periodo ? -1 : 1) : orden[a.convenio] - orden[b.convenio]));
+  const lista = Array.from(grupos.values()).sort((a, b) => {
+    if (a.escenario !== b.escenario) return a.escenario < b.escenario ? -1 : 1;
+    if (a.periodo !== b.periodo) return a.periodo < b.periodo ? -1 : 1;
+    return orden[a.convenio] - orden[b.convenio];
+  });
+  // Lo real va primero; cada escenario sigue al último mes real.
+  lista.sort((a, b) => (a.escenario === '' ? 0 : 1) - (b.escenario === '' ? 0 : 1));
   const anterior = {};
   const out = lista.map(g => {
-    const prev = anterior[g.convenio];
-    anterior[g.convenio] = g.costo;
-    return [g.periodo, g.tipo, g.convenio, g.personas, r2(g.remunerativo), r2(g.sac), r2(g.noRem), r2(g.aportes), r2(g.neto), r2(g.cargas), r2(g.costo), prev ? g.costo / prev - 1 : ''];
+    const k = g.escenario + '|' + g.convenio;
+    const prev = anterior[k] !== undefined ? anterior[k] : anterior['|' + g.convenio];
+    anterior[k] = g.costo;
+    return [g.periodo, g.tipo, g.escenario, g.convenio, g.personas, r2(g.remunerativo), r2(g.sac), r2(g.noRem), r2(g.aportes), r2(g.neto), r2(g.cargas), r2(g.costo), prev ? g.costo / prev - 1 : ''];
   });
   return {
-    encabezado: ['Período', 'Tipo', 'Convenio', 'Personas', 'Total remunerativo', 'SAC (aguinaldo)', 'No remunerativo', 'Aportes', 'Neto a cobrar', 'Contribuciones y ART', 'Costo total empresa', 'Variación costo vs mes anterior'],
-    formatos: ['periodo', 'texto', 'texto', 'num', 'pesos', 'pesos', 'pesos', 'pesos', 'pesos', 'pesos', 'pesos', 'porc'],
+    encabezado: ['Período', 'Tipo', 'Escenario', 'Convenio', 'Personas', 'Total remunerativo', 'SAC y liquidaciones finales', 'No remunerativo', 'Aportes', 'Neto a cobrar', 'Contribuciones y ART', 'Costo total empresa', 'Variación costo vs mes anterior'],
+    formatos: ['periodo', 'texto', 'texto', 'texto', 'num', 'pesos', 'pesos', 'pesos', 'pesos', 'pesos', 'pesos', 'pesos', 'porc'],
     filas: out,
   };
+}
+
+/** Costo total por mes de cada escenario y la diferencia contra Base. */
+function tablaEscenarios(escenarios, proy) {
+  const periodos = Array.from(new Set(proy.map(r => r.periodo))).sort();
+  const costo = {}, personas = {};
+  for (const r of proy) {
+    const k = r.periodo + '|' + r.escenario;
+    costo[k] = (costo[k] || 0) + r.costo;
+    personas[k] = (personas[k] || 0) + 1;
+  }
+  const otros = escenarios.filter(e => e !== ESCENARIO_BASE);
+  const encabezado = ['Período'];
+  const formatos = ['periodo'];
+  for (const e of escenarios) { encabezado.push('Personas — ' + e, 'Costo total — ' + e); formatos.push('num', 'pesos'); }
+  for (const e of otros) { encabezado.push('Diferencia ' + e + ' vs Base', 'Diferencia %'); formatos.push('pesos', 'porc'); }
+  const totales = {};
+  const filas = periodos.map(per => {
+    const f = [per];
+    for (const e of escenarios) {
+      const c = r2(costo[per + '|' + e] || 0);
+      totales[e] = (totales[e] || 0) + c;
+      f.push(personas[per + '|' + e] || 0, c);
+    }
+    const base = costo[per + '|' + ESCENARIO_BASE] || 0;
+    for (const e of otros) {
+      const c = costo[per + '|' + e] || 0;
+      f.push(r2(c - base), base ? c / base - 1 : '');
+    }
+    return f;
+  });
+  if (periodos.length) {
+    const f = ['Total'];
+    for (const e of escenarios) f.push('', r2(totales[e]));
+    for (const e of otros) f.push(r2(totales[e] - totales[ESCENARIO_BASE]), totales[ESCENARIO_BASE] ? totales[e] / totales[ESCENARIO_BASE] - 1 : '');
+    filas.push(f);
+  }
+  return { encabezado, formatos, filas };
 }
 
 /** Bruto y neto (sin SAC) por persona y por mes, con la variación contra el primer mes. */
@@ -783,20 +1101,131 @@ function tablaControl(d, reales) {
   };
 }
 
+const CONCEPTOS_FINAL = [
+  ['Indemnización', /^Indemnización/],
+  ['Preaviso', /^Preaviso/],
+  ['Integración mes de despido', /^Integración/],
+  ['SAC s/ preaviso e integración', /^SAC sobre (preaviso|integración)/],
+  ['SAC proporcional', /^SAC proporcional/],
+  ['Vacaciones no gozadas', /^Vacaciones no gozadas/],
+  ['SAC s/ vacaciones', /^SAC sobre vacaciones/],
+];
+
+/** Detalle de las liquidaciones finales estimadas (reales y de cada escenario). */
+function tablaFinales(filas) {
+  const out = filas.filter(r => r._final).map(r => {
+    const f = r._final;
+    const montos = CONCEPTOS_FINAL.map(([, re]) => r2(f.conceptos.filter(c => re.test(c[0])).reduce((s, c) => s + c[1], 0)));
+    const antig = Math.floor(f.meses / 12) + ' años ' + (f.meses % 12) + ' meses' + (f.enPrueba ? ' (período de prueba)' : '');
+    return [r.periodo, r.tipo, r.escenario, r.legajo, r.nombre, fechaCorta(f.baja), f.motivo, antig, f.mejorRem].concat(montos, [f.total, f.aportes, f.neto, f.contribuciones, f.costo]);
+  });
+  return {
+    encabezado: ['Período', 'Tipo', 'Escenario', 'Legajo', 'Empleado', 'Fecha de baja', 'Motivo', 'Antigüedad', 'Mejor remuneración (12 meses)']
+      .concat(CONCEPTOS_FINAL.map(c => c[0]), ['Total bruto', 'Aportes', 'Neto estimado', 'Contribuciones', 'Costo total']),
+    formatos: ['periodo', 'texto', 'texto', 'texto', 'texto', 'texto', 'texto', 'texto', 'pesos'].concat(CONCEPTOS_FINAL.map(() => 'pesos'), ['pesos', 'pesos', 'pesos', 'pesos', 'pesos']),
+    filas: out,
+  };
+}
+
+/** Lo que pasa en los próximos meses: aniversarios, fin de prueba, altas, bajas, aumentos. */
+function tablaAlertas(d, meses) {
+  const ult = ultimoPeriodo(d.novedades);
+  const out = [];
+  if (!ult) return { encabezado: ['Mes', 'Tipo', 'Legajo', 'Empleado', 'Detalle'], formatos: ['periodo', 'texto', 'texto', 'texto', 'texto'], filas: out };
+  const hasta = sumarMeses(ult, meses || 3);
+  for (let per = sumarMeses(ult, 1); per <= hasta; per = sumarMeses(per, 1)) {
+    for (const leg of d.legajos.values()) {
+      if (leg.escenario) continue;
+      if (leg.ingreso && periodoDe(leg.ingreso) === per) out.push([per, 'Alta', leg.legajo, leg.nombre, 'Ingresa el ' + fechaCorta(leg.ingreso) + '.']);
+      if (leg.baja && periodoDe(leg.baja) === per) out.push([per, 'Baja', leg.legajo, leg.nombre, 'Se va el ' + fechaCorta(leg.baja) + (leg.motivoBaja ? ' (' + leg.motivoBaja + ').' : '. Falta el motivo para estimar la liquidación final.')]);
+      if (!legajoVigente(leg, per, null) || !leg.ingreso) continue;
+      if (leg.convenio === CONVENIO_UOM) {
+        const antes = aniosCumplidos(leg.ingreso, sumarMeses(per, -1)), ahora = aniosCumplidos(leg.ingreso, per);
+        if (ahora > antes) out.push([per, 'Antigüedad', leg.legajo, leg.nombre, 'Cumple ' + ahora + ' años: la antigüedad pasa a ' + Math.round((ahora + leg.aniosReconocidos) * d.p.ANTIGUEDAD_UOM_POR_ANIO * 1000) / 10 + '% del básico.']);
+      }
+      const finPrueba = sumarMeses(periodoDe(leg.ingreso), d.p.PERIODO_PRUEBA_MESES);
+      if (finPrueba === per) out.push([per, 'Período de prueba', leg.legajo, leg.nombre, 'Termina el período de prueba (' + d.p.PERIODO_PRUEBA_MESES + ' meses desde el ' + fechaCorta(leg.ingreso) + ').']);
+    }
+    for (const a of d.aumentos.filter(x => x.desde === per && aplicaEscenario(x.escenario, ESCENARIO_BASE))) {
+      const leg = a.legajo ? d.legajos.get(a.legajo) : null;
+      out.push([per, 'Aumento previsto', a.legajo, leg ? leg.nombre : 'Todo ' + a.convenio, describirAumento(a) + '.']);
+      if (a.tipo === AUMENTO_ESCALA && !d.escala.some(e => e.desde === per)) out.push([per, 'Escala', '', '', 'Cuando se confirme la paritaria, cargá el básico en Escala UOM.']);
+    }
+  }
+  return { encabezado: ['Mes', 'Tipo', 'Legajo', 'Empleado', 'Detalle'], formatos: ['periodo', 'texto', 'texto', 'texto', 'texto'], filas: out };
+}
+
 /** Todo lo que se regenera con "Liquidar y actualizar todo". */
 function calcularTodo(crudo) {
   const d = prepararDatos(crudo);
   const reales = liquidarReales(d);
-  const proy = proyectar(d, reales);
-  const todas = reales.concat(proy);
+  const porEscenario = d.escenarios.map(e => proyectar(d, reales, e));
+  const proy = [].concat.apply([], porEscenario);
+  const base = porEscenario[0];
   return {
     avisos: d.avisos,
+    escenarios: d.escenarios,
     liquidacion: tablaDesdeObjetos(COLUMNAS_LIQ, reales),
     proyeccion: tablaDesdeObjetos(COLUMNAS_LIQ, proy),
-    resumen: tablaResumen(todas),
-    evolucion: tablaEvolucion(d, todas),
+    resumen: tablaResumen(reales.concat(proy)),
+    escenariosTabla: tablaEscenarios(d.escenarios, proy),
+    evolucion: tablaEvolucion(d, reales.concat(base)),
     control: tablaControl(d, reales),
+    finales: tablaFinales(reales.concat(proy)),
+    alertas: tablaAlertas(d, 3),
   };
+}
+
+/**
+ * Estima la liquidación final de una persona con una baja hipotética, sin guardar nada.
+ * Devuelve el detalle o { error }.
+ */
+function simularBaja(crudo, legajo, fechaBaja, motivo, vacTomadas) {
+  const d = prepararDatos(crudo);
+  const leg = d.legajos.get(texto(legajo));
+  if (!leg) return { error: 'No encuentro el legajo ' + legajo + '.' };
+  const f = fecha(fechaBaja);
+  if (!f) return { error: 'La fecha de baja no es válida.' };
+  Object.assign(leg, { baja: f, motivoBaja: normalizarMotivo(motivo) || MOTIVO_RENUNCIA, vacTomadas: num(vacTomadas), activo: true });
+  const per = periodoDe(f);
+  if (d.p.PROYECTAR_HASTA < per) d.p.PROYECTAR_HASTA = per;
+  const reales = liquidarReales(d);
+  const fila = reales.concat(proyectar(d, reales, ESCENARIO_BASE)).find(r => r._final && r.legajo === leg.legajo);
+  if (!fila) return { error: 'No hay datos de ' + leg.nombre + ' para ' + per + ' (¿la fecha es anterior al primer mes cargado?).' };
+  return Object.assign({}, fila._final, { baja: fechaCorta(f), mesNeto: r2(fila.netoSinSAC), mesDias: fila.dias });
+}
+
+/** Próximo número de legajo: U07, F23… según el convenio. */
+function siguienteLegajo(d, convenio) {
+  const pre = convenio === CONVENIO_UOM ? 'U' : 'F';
+  let max = 0;
+  for (const id of d.legajos.keys()) {
+    const m = id.match(/^([A-Za-z]+)(\d+)$/);
+    if (m && m[1].toUpperCase() === pre) max = Math.max(max, Number(m[2]));
+  }
+  return pre + dos(max + 1);
+}
+
+/**
+ * Cambios en Novedades para un aumento que rige desde un mes ya cargado.
+ * Devuelve [{ periodo, legajo, campo, valor }]. Para UOM el porcentaje se toma
+ * sobre el bruto de cada mes y se suma a "a cuenta futuros aumentos".
+ */
+function cambiosPorAumento(d, a) {
+  const reales = liquidarReales(d);
+  const rem = new Map(reales.map(r => [r.periodo + '|' + r.legajo, r.remunerativo]));
+  const cambios = [];
+  for (const n of d.novedades) {
+    if (n.periodo < a.desde) continue;
+    const leg = d.legajos.get(n.legajo);
+    if (a.legajo ? a.legajo !== n.legajo : a.convenio !== leg.convenio) continue;
+    const copia = Object.assign({}, n);
+    aplicarAumentos(copia, leg, [a], rem.get(n.periodo + '|' + n.legajo));
+    for (const campo of ['basico', 'netoPactado', 'aCuenta', 'anticipo']) {
+      if (copia[campo] !== n[campo]) cambios.push({ periodo: n.periodo, legajo: n.legajo, campo: campo, valor: copia[campo] });
+    }
+  }
+  return cambios;
 }
 
 // --- Recibo ------------------------------------------------------------------------------
@@ -814,11 +1243,11 @@ function armarRecibo(leg, r, p) {
   fila('DETALLE DE LIQUIDACIÓN — borrador de control');
   fila(p.EMPRESA || '');
   fila('');
-  fila('Período', r.periodo + (r.tipo === 'Proyectado' ? ' (proyectado)' : ''));
+  fila('Período', r.periodo + (r.tipo === 'Proyectado' ? ' (proyectado' + (r.escenario && r.escenario !== ESCENARIO_BASE ? ', escenario ' + r.escenario : '') + ')' : ''));
   fila('Empleado', leg.nombre);
   fila('Legajo', leg.legajo, 'CUIL', leg.cuil);
   fila('Convenio', leg.convenio + (leg.categoria ? ' — ' + leg.categoria : ''));
-  fila('Fecha de ingreso', leg.ingreso ? dos(leg.ingreso.d) + '/' + dos(leg.ingreso.m) + '/' + leg.ingreso.y : '', 'Antigüedad', r.anios === '' ? '' : r.anios + ' años');
+  fila('Fecha de ingreso', fechaCorta(leg.ingreso), 'Antigüedad', r.anios === '' ? '' : r.anios + ' años');
   fila('');
   fila('Concepto', 'Remunerativo', 'No remunerativo', 'Descuentos');
   const conceptos = [
@@ -830,24 +1259,29 @@ function armarRecibo(leg, r, p) {
     ['Otros remunerativos', r.otrosRem, 'R'],
     ['SAC (aguinaldo)', r.sac, 'R'],
     ['No remunerativos', r.noRem, 'N'],
+  ];
+  if (r._final) for (const c of r._final.conceptos) conceptos.push([c[0] + ' (estimado)', c[1], c[2]]);
+  conceptos.push(
     ['Jubilación ' + pct(t.jub), r.jubilacion, 'D'],
     ['Ley 19.032 ' + pct(t.pami), r.ley19032, 'D'],
     ['Obra social ' + pct(t.os), r.obraSocial, 'D'],
     ['Cuota sindical UOM ' + pct(t.sind), r.cuotaSindical, 'D'],
     ['Aporte fijo UOM', r.fijoUOM, 'D'],
-    ['Otros descuentos', r.descuentos, 'D'],
-  ];
+    ['Otros descuentos', r.descuentos, 'D']
+  );
+  if (r._final && r._final.aportes) conceptos.push(['Aportes sobre la liquidación final', r._final.aportes, 'D']);
+  let rem = 0, noRem = 0, desc = 0;
   for (const [nombre, monto, tipo] of conceptos) {
     if (!monto) continue;
-    if (tipo === 'R') fila(nombre, monto);
-    else if (tipo === 'N') fila(nombre, '', monto);
-    else fila(nombre, '', '', monto);
+    if (tipo === 'R') { fila(nombre, monto); rem += monto; }
+    else if (tipo === 'N') { fila(nombre, '', monto); noRem += monto; }
+    else { fila(nombre, '', '', monto); desc += monto; }
   }
-  fila('Totales', r2(r.remunerativo + r.sac), r.noRem, r2(r.aportes + r.descuentos));
+  fila('Totales', r2(rem), r2(noRem), r2(desc));
   fila('');
   fila('NETO A COBRAR', r.neto);
   fila('');
-  fila('Costo para la empresa', r.costo, 'Contribuciones y ART', r2(r.contribuciones + r.art));
+  fila('Costo para la empresa', r.costo, 'Contribuciones y ART', r2(r.costo - rem - noRem));
   fila('');
   fila('Documento interno para controlar la liquidación. El recibo oficial lo emite el estudio contable.');
   return filas;

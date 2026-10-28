@@ -39,7 +39,7 @@ test('cargar datos iniciales arma todas las hojas y liquida', () => {
   const liq = e.valores('Liquidación');
   assert.equal(liq.length, 5); // encabezado + 4
   const col = liq[0].indexOf('Neto a cobrar');
-  const f1jun = liq.find(f => f[0] === '2026-06' && f[2] === 'F1');
+  const f1jun = liq.find(f => f[0] === '2026-06' && f[3] === 'F1');
   assert.ok(Math.abs(f1jun[liq[0].indexOf('Neto sin SAC')] - 1660000) < 0.02);
   assert.ok(f1jun[col] > 1660000); // incluye aguinaldo
   assert.equal(e.valores('Control')[1][10], 'OK');
@@ -71,7 +71,7 @@ test('preparar mes siguiente agrega julio sin las bajas y liquida', () => {
   assert.equal(u1[nov[0].indexOf('Anticipo absorbible')], 50000);
   assert.equal(u1[nov[0].indexOf('Empleado')], 'Operaria Uno');
   e.ctx.actualizarTodo();
-  assert.ok(e.valores('Liquidación').some(f => f[0] === '2026-07' && f[2] === 'F1'));
+  assert.ok(e.valores('Liquidación').some(f => f[0] === '2026-07' && f[3] === 'F1'));
 });
 
 test('recibos en PDF del período', () => {
@@ -79,4 +79,59 @@ test('recibos en PDF del período', () => {
   e.ctx.cargarDatosIniciales();
   e.ctx.exportarRecibosPDF();
   assert.deepEqual(e.pdfs.sort(), ['2026-06 - F1 - Administrativa.pdf', '2026-06 - U1 - Operaria Uno.pdf']);
+});
+
+test('formulario de alta: legajo nuevo, Novedades si entra en un mes cargado', () => {
+  const e = entorno();
+  e.ctx.cargarDatosIniciales();
+  const d = e.ctx.datosFormulario();
+  assert.equal(d.siguientePeriodo, '2026-07');
+  assert.equal(d.legajos.map(l => l.legajo).join(','), 'F1,U1');
+  const r = e.ctx.guardarAlta({ nombre: 'Nueva Persona', convenio: 'Fuera de convenio', ingreso: '2026-06-16', altaBasico: '1500000', regimen: 'Completo' });
+  assert.match(r.mensaje, /F03/);
+  const leg = e.valores('Legajos');
+  assert.equal(leg[leg.length - 1][0], 'F03');
+  const nov = e.valores('Novedades').filter(f => f[1] === 'F03');
+  assert.equal(nov.length, 1);
+  const liq = e.valores('Liquidación').find(f => f[3] === 'F03');
+  assert.equal(liq[liq.length - 1].includes('Proporcional: 15 días'), true);
+  // Alta futura: no toca Novedades pero entra en la proyección
+  e.ctx.guardarAlta({ nombre: 'Futuro', convenio: 'UOM', categoria: 'Operario', ingreso: '2026-09-01', afiliado: 'No' });
+  assert.equal(e.valores('Novedades').filter(f => f[1] === 'U02').length, 0);
+  assert.ok(e.valores('Proyección').some(f => f[0] === '2026-09' && f[3] === 'U02'));
+  assert.throws(() => e.ctx.guardarAlta({ nombre: 'Sin sueldo', convenio: 'Fuera de convenio', ingreso: '2026-09-01' }), /sueldo básico o el neto/);
+});
+
+test('formulario de baja: simula, registra y saca meses posteriores', () => {
+  const e = entorno();
+  e.ctx.cargarDatosIniciales();
+  e.ctx.prepararMesSiguiente(); // julio
+  const sim = e.ctx.simularBajaFormulario({ legajo: 'U1', fecha: '2026-07-15', motivo: 'Despido sin causa', vacTomadas: '0' });
+  assert.ok(!sim.error, sim.error);
+  assert.ok(sim.total > 0);
+  const r = e.ctx.guardarBaja({ legajo: 'U1', fecha: '2026-06-30', motivo: 'Renuncia', vacTomadas: '5' });
+  assert.match(r.mensaje, /Se sacaron 1 filas/);
+  assert.ok(!e.valores('Novedades').some(f => f[0] === '2026-07' && f[1] === 'U1'));
+  const leg = e.valores('Legajos');
+  const u1 = leg.find(f => f[0] === 'U1');
+  assert.equal(u1[leg[0].indexOf('Estado')], 'Baja');
+  assert.equal(u1[leg[0].indexOf('Motivo de baja')], 'Renuncia');
+  const fin = e.valores('Liquidaciones finales');
+  assert.equal(fin.length, 2);
+  assert.equal(fin[1][3], 'U1');
+});
+
+test('formulario de aumento: individual en mes cargado actualiza Novedades; de escenario solo proyecta', () => {
+  const e = entorno();
+  e.ctx.cargarDatosIniciales();
+  const r = e.ctx.guardarAumento({ legajo: 'F1', desde: '2026-06', porcentaje: '10', monto: '' });
+  assert.match(r.mensaje, /1 mes ya cargado/);
+  const nov = e.valores('Novedades');
+  const f1 = nov.find(f => f[0] === '2026-06' && f[1] === 'F1');
+  assert.equal(f1[nov[0].indexOf('Neto pactado (fuera de convenio)')], 1826000);
+  e.ctx.guardarAumento({ legajo: '', convenio: 'UOM', desde: '2026-05', monto: '20000', escenario: 'Optimista' });
+  const aum = e.valores('Aumentos previstos');
+  assert.equal(aum[aum.length - 1][0], '2026-07');
+  assert.ok(e.valores('Escenarios')[0].includes('Costo total — Optimista'));
+  assert.throws(() => e.ctx.guardarAumento({ legajo: 'F1', desde: '2026-08' }), /porcentaje o un monto/);
 });

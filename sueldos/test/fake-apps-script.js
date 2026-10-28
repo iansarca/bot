@@ -63,6 +63,15 @@ function crearHoja(ss, nombre, id) {
       return rango(1, 1, Math.max(hoja.getLastRow(), 1), Math.max(hoja.getLastColumn(), 1));
     },
     clear() { celdas.clear(); formatos.clear(); return hoja; },
+    deleteRow(fila) {
+      const nuevas = new Map(), nf = new Map();
+      for (const [k, v] of celdas) { const [r, c] = k.split(',').map(Number); if (r !== fila) nuevas.set((r > fila ? r - 1 : r) + ',' + c, v); }
+      for (const [k, v] of formatos) { const [r, c] = k.split(',').map(Number); if (r !== fila) nf.set((r > fila ? r - 1 : r) + ',' + c, v); }
+      celdas.clear(); formatos.clear();
+      for (const [k, v] of nuevas) celdas.set(k, v);
+      for (const [k, v] of nf) formatos.set(k, v);
+      return hoja;
+    },
     setFrozenRows: () => hoja,
     setFrozenColumns: () => hoja,
     setTabColor: () => hoja,

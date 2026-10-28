@@ -2,12 +2,12 @@
  * Sueldos — menú y lectura/escritura de la planilla (Google Apps Script).
  *
  * Va pegado en el editor de Apps Script de la planilla (Extensiones > Apps Script),
- * junto con Calculo.gs, que tiene las reglas de cálculo.
+ * junto con Calculo.gs (las reglas de cálculo) y Formularios.html (alta, baja y aumentos).
  *
  * Hojas que se cargan a mano: Parámetros, Legajos, Escala UOM, Topes, Novedades,
  * Aumentos previstos y Planilla original.
- * Hojas que se regeneran solas (no editarlas): Liquidación, Proyección, Resumen,
- * Evolución, Control y Recibo.
+ * Hojas que se regeneran solas (no editarlas): Resumen, Escenarios, Liquidación,
+ * Proyección, Evolución, Control, Liquidaciones finales, Alertas y Recibo.
  */
 
 const FORMATO = {
@@ -24,6 +24,10 @@ function onOpen() {
     .createMenu('Sueldos')
     .addItem('Liquidar y actualizar todo', 'actualizarTodo')
     .addItem('Preparar mes siguiente', 'prepararMesSiguiente')
+    .addSeparator()
+    .addItem('Dar de alta un empleado…', 'abrirAlta')
+    .addItem('Dar de baja un empleado…', 'abrirBaja')
+    .addItem('Aumento de sueldo (individual o general)…', 'abrirAumento')
     .addSeparator()
     .addItem('Ver recibo (período y legajo de la hoja Recibo)', 'verRecibo')
     .addItem('Guardar en PDF los recibos del período', 'exportarRecibosPDF')
@@ -58,21 +62,31 @@ function cargarDatosIniciales() {
 }
 
 function actualizarTodo() {
-  const ss = SpreadsheetApp.getActive();
+  const res = actualizar_();
+  if (res.avisos.length) {
+    SpreadsheetApp.getUi().alert('Listo, con avisos', res.mensaje + '\n\n' + res.avisos.slice(0, 30).join('\n'), SpreadsheetApp.getUi().ButtonSet.OK);
+  } else {
+    SpreadsheetApp.getActive().toast(res.mensaje, 'Sueldos', 8);
+  }
+}
+
+/** Recalcula y reescribe todas las hojas de salida. Devuelve { mensaje, avisos }. */
+function actualizar_() {
   const res = calcularTodo(leerTodo_());
   escribirTabla_(HOJAS.liquidacion, res.liquidacion);
   escribirTabla_(HOJAS.proyeccion, res.proyeccion);
   escribirTabla_(HOJAS.resumen, res.resumen);
+  escribirTabla_(HOJAS.escenarios, res.escenariosTabla);
   escribirTabla_(HOJAS.evolucion, res.evolucion);
   escribirTabla_(HOJAS.control, res.control);
+  escribirTabla_(HOJAS.finales, res.finales);
+  escribirTabla_(HOJAS.alertas, res.alertas);
   const revisar = res.control.filas.filter(f => f[f.length - 1] !== 'OK').length;
-  let msg = res.liquidacion.filas.length + ' liquidaciones y ' + res.proyeccion.filas.length + ' meses proyectados.';
+  let msg = res.liquidacion.filas.length + ' liquidaciones y ' + res.proyeccion.filas.length + ' meses proyectados';
+  msg += res.escenarios.length > 1 ? ' (' + res.escenarios.length + ' escenarios: ' + res.escenarios.join(', ') + ').' : '.';
   if (res.control.filas.length) msg += ' Control: ' + revisar + ' para revisar.';
-  if (res.avisos.length) {
-    SpreadsheetApp.getUi().alert('Listo, con avisos', msg + '\n\n' + res.avisos.slice(0, 30).join('\n'), SpreadsheetApp.getUi().ButtonSet.OK);
-  } else {
-    ss.toast(msg, 'Sueldos', 8);
-  }
+  if (res.alertas.filas.length) msg += ' ' + res.alertas.filas.length + ' alertas para los próximos meses.';
+  return { mensaje: msg, avisos: res.avisos };
 }
 
 function prepararMesSiguiente() {
@@ -83,10 +97,13 @@ function prepararMesSiguiente() {
     ui.alert('No hay ningún mes cargado en Novedades. Cargá el primero a mano.');
     return;
   }
+  const aumentos = res.filas.filter(n => n.observaciones && n.observaciones !== 'Nuevo: completar el sueldo.').length;
   const ok = ui.alert(
     'Preparar ' + res.periodo,
     'Se agregan ' + res.filas.length + ' filas a Novedades para ' + res.periodo +
-      ', copiando básico, neto pactado, a cuenta y anticipo del mes anterior.\n\n' +
+      ', copiando básico, neto pactado, a cuenta y anticipo del mes anterior' +
+      (aumentos ? ' y aplicando los aumentos previstos (' + aumentos + ' personas)' : '') + '.\n\n' +
+      (res.avisos.length ? res.avisos.join('\n') + '\n\n' : '') +
       'Antes de seguir, si cambió la escala UOM cargala en la hoja Escala UOM, así se descuenta del anticipo.',
     ui.ButtonSet.OK_CANCEL
   );
@@ -143,7 +160,7 @@ function exportarRecibosPDF() {
   const d = prepararDatos(leerTodo_());
   const reales = liquidarReales(d);
   let filas = reales.filter(r => r.periodo === per);
-  if (!filas.length) filas = proyectar(d, reales).filter(r => r.periodo === per);
+  if (!filas.length) filas = proyectar(d, reales, ESCENARIO_BASE).filter(r => r.periodo === per);
   if (!filas.length) {
     SpreadsheetApp.getUi().alert('No hay liquidaciones para ' + per + '.');
     return;
@@ -170,34 +187,47 @@ const INSTRUCCIONES = [
   ['2. Sueldos > Preparar mes siguiente: copia a "Novedades" lo del mes anterior para el personal activo.'],
   ['3. En "Novedades" cargá lo que cambie: horas extra, otros conceptos, descuentos, y los días si alguien entró o salió en el mes.'],
   ['   Fuera de convenio: cargá el sueldo básico (bruto) o el neto pactado. Si cargás el neto, el bruto se calcula solo.'],
-  ['4. Sueldos > Liquidar y actualizar todo. Se regeneran Liquidación, Proyección, Resumen, Evolución y Control.'],
+  ['4. Sueldos > Liquidar y actualizar todo. Se regeneran todas las hojas grises.'],
   ['5. Para controlar o mandar al estudio: la hoja "Liquidación" filtrada por período, o los recibos en PDF desde la hoja "Recibo".'],
   [''],
-  ['PROYECCIONES', 'h'],
-  ['En "Aumentos previstos" cargá los aumentos que esperás. Hasta qué mes se proyecta: Parámetros > PROYECTAR_HASTA.'],
+  ['ALTAS, BAJAS Y AUMENTOS', 'h'],
+  ['Sueldos > Dar de alta: agrega el legajo con su sueldo inicial. Si la fecha es futura, entra solo en la proyección hasta que llegue el mes.'],
+  ['Sueldos > Dar de baja: pone fecha y motivo, muestra la liquidación final estimada antes de confirmar y deja de liquidarlo después de esa fecha.'],
+  ['Sueldos > Aumento de sueldo: a una persona o a todo un convenio, en % o en monto fijo, desde un mes. Si el mes ya está cargado, actualiza Novedades.'],
+  [''],
+  ['PROYECCIONES Y ESCENARIOS', 'h'],
+  ['"Aumentos previstos" tiene los aumentos esperados. Hasta qué mes se proyecta: Parámetros > PROYECTAR_HASTA.'],
   ['UOM: "Aumento de escala" sube el básico. "Anticipo a cuenta" agrega un anticipo (% del bruto del mes anterior)'],
-  ['que se va absorbiendo con cada aumento de escala. Fuera de convenio: "Aumento de sueldo".'],
+  ['que se va absorbiendo con cada aumento de escala. "Aumento de sueldo" (UOM o fuera de convenio, general o por legajo).'],
+  ['Escenarios: poné un nombre en la columna Escenario (por ejemplo "Paritaria alta") para que ese aumento valga solo en ese escenario.'],
+  ['Vacío vale para todos; "Base" solo para el principal. En Legajos, un alta con escenario es hipotética (por ejemplo "Contratar 2").'],
+  ['La hoja Escenarios compara el costo mes a mes de cada uno contra Base.'],
   [''],
   ['HOJAS', 'h'],
   ['Amarillas (se cargan a mano): Novedades, Legajos, Escala UOM, Aumentos previstos, Parámetros, Topes, Planilla original.'],
-  ['Grises (se regeneran solas, no las edites): Resumen, Liquidación, Proyección, Evolución, Control, Recibo.'],
+  ['Grises (se regeneran solas, no las edites): Resumen, Escenarios, Liquidación, Proyección, Evolución, Control,'],
+  ['Liquidaciones finales, Alertas y Recibo.'],
+  ['Alertas: lo que pasa en los próximos 3 meses (aniversarios que suben la antigüedad, fin de período de prueba, altas, bajas, aumentos).'],
   ['Control compara lo calculado con "Planilla original" (los brutos y netos de la planilla anterior).'],
   [''],
   ['REGLAS QUE USA', 'h'],
   ['• Antigüedad UOM: 1% del básico por cada año cumplido al último día del mes (más los años reconocidos del legajo).'],
   ['• Aportes: jubilación 11%, Ley 19.032 3%, obra social 3% (con el tope de la hoja Topes). UOM afiliados: cuota sindical 2,5% + aporte fijo.'],
   ['• Régimen de aportes del legajo: Completo, Solo jubilación o Sin aportes (sin aportes tampoco lleva contribuciones ni ART).'],
-  ['• Aguinaldo: en junio y diciembre, 50% de la mejor remuneración del semestre, proporcional si entró en el semestre.'],
+  ['• Aguinaldo: en junio y diciembre, 50% de la mejor remuneración del semestre, proporcional si entró o se fue en el semestre.'],
+  ['• Mes de alta o de baja: se paga por los días trabajados (mes de 30 días), salvo que cargues los días a mano.'],
+  ['• Liquidación final estimada: SAC y vacaciones proporcionales; si es despido sin causa, además indemnización (art. 245, sin tope),'],
+  ['  preaviso (1 mes, o 2 desde los 5 años; 15 días en período de prueba) e integración del mes. Importes brutos aproximados.'],
   ['• Todos los porcentajes y montos fijos se cambian en Parámetros.'],
   [''],
   ['No calcula Ganancias ni reemplaza el recibo oficial, el F.931 ni el Libro de Sueldos Digital: eso lo sigue haciendo el estudio.'],
 ];
 
-const ORDEN_HOJAS = ['instrucciones', 'resumen', 'liquidacion', 'novedades', 'legajos', 'escala', 'aumentos',
-  'proyeccion', 'evolucion', 'control', 'recibo', 'parametros', 'topes', 'planilla'];
+const ORDEN_HOJAS = ['instrucciones', 'resumen', 'escenarios', 'alertas', 'liquidacion', 'novedades', 'legajos', 'escala', 'aumentos',
+  'proyeccion', 'evolucion', 'control', 'finales', 'recibo', 'parametros', 'topes', 'planilla'];
 
 const LISTAS = {
-  legajos: { convenio: [CONVENIO_UOM, CONVENIO_FC], regimen: [REGIMEN_COMPLETO, REGIMEN_SOLO_JUB, REGIMEN_SIN], afiliado: ['Sí', 'No'], estado: ['Activo', 'Baja'] },
+  legajos: { convenio: [CONVENIO_UOM, CONVENIO_FC], regimen: [REGIMEN_COMPLETO, REGIMEN_SOLO_JUB, REGIMEN_SIN], afiliado: ['Sí', 'No'], estado: ['Activo', 'Baja'], motivoBaja: MOTIVOS_BAJA },
   aumentos: { convenio: [CONVENIO_UOM, CONVENIO_FC], tipo: [AUMENTO_ESCALA, AUMENTO_ANTICIPO, AUMENTO_SUELDO] },
 };
 
@@ -239,7 +269,7 @@ function inicializar() {
       sh.setColumnWidth(3, 600);
     }
   }
-  for (const clave of ['resumen', 'liquidacion', 'proyeccion', 'evolucion', 'control', 'recibo']) {
+  for (const clave of ['resumen', 'escenarios', 'alertas', 'liquidacion', 'proyeccion', 'evolucion', 'control', 'finales', 'recibo']) {
     const sh = crear(clave);
     if (sh) sh.setTabColor('#999999');
   }
@@ -306,6 +336,146 @@ function cargarDatos_(datos) {
   ss.toast('Datos cargados.', 'Sueldos', 5);
 }
 
+// --- Formularios: alta, baja y aumento ------------------------------------------------
+
+function abrirAlta() { abrirFormulario_('alta', 'Dar de alta un empleado'); }
+function abrirBaja() { abrirFormulario_('baja', 'Dar de baja un empleado'); }
+function abrirAumento() { abrirFormulario_('aumento', 'Aumento de sueldo'); }
+
+function abrirFormulario_(modo, titulo) {
+  const t = HtmlService.createTemplateFromFile('Formularios');
+  t.modo = modo;
+  SpreadsheetApp.getUi().showModalDialog(t.evaluate().setWidth(480).setHeight(640), titulo);
+}
+
+/** Lo que necesitan los formularios para armar sus listas. */
+function datosFormulario() {
+  const d = prepararDatos(leerTodo_());
+  const ult = ultimoPeriodo(d.novedades);
+  const sig = ult ? sumarMeses(ult, 1) : '';
+  const vigentes = Array.from(d.legajos.values())
+    .filter(l => !l.escenario && ((ult && legajoVigente(l, ult, null)) || (sig && legajoVigente(l, sig, null))))
+    .sort((a, b) => a.nombre.localeCompare(b.nombre));
+  return {
+    legajos: vigentes.map(l => ({ legajo: l.legajo, nombre: l.nombre, convenio: l.convenio, baja: fechaCorta(l.baja) })),
+    categorias: Array.from(new Set(d.escala.map(e => e.categoria))),
+    escenarios: d.escenarios,
+    motivos: MOTIVOS_BAJA,
+    convenios: [CONVENIO_UOM, CONVENIO_FC],
+    ultimoPeriodo: ult,
+    siguientePeriodo: sig,
+  };
+}
+
+/** Agrega un legajo. Si entra en un mes ya cargado, también lo agrega a Novedades. */
+function guardarAlta(f) {
+  const d = prepararDatos(leerTodo_());
+  const convenio = normalizarConvenio(f.convenio) || CONVENIO_FC;
+  const nombre = texto(f.nombre);
+  const ingreso = fecha(f.ingreso);
+  const escenario = normalizarEscenario(f.escenario);
+  if (!nombre) throw new Error('Falta el apellido y nombre.');
+  if (!ingreso) throw new Error('Falta la fecha de ingreso.');
+  if (convenio === CONVENIO_UOM && !texto(f.categoria)) throw new Error('Falta la categoría UOM.');
+  if (convenio === CONVENIO_FC && !num(f.altaBasico) && !num(f.altaNeto)) throw new Error('Cargá el sueldo básico o el neto pactado.');
+  const id = siguienteLegajo(d, convenio);
+  const leg = {
+    legajo: id, nombre: nombre, cuil: texto(f.cuil), convenio: convenio,
+    categoria: convenio === CONVENIO_UOM ? texto(f.categoria) : '',
+    ingreso: f.ingreso, regimen: normalizarRegimen(f.regimen),
+    afiliado: convenio === CONVENIO_UOM ? (siNo(f.afiliado, true) ? 'Sí' : 'No') : '',
+    estado: 'Activo',
+    altaBasico: convenio === CONVENIO_FC ? num(f.altaBasico) || '' : '',
+    altaNeto: convenio === CONVENIO_FC ? num(f.altaNeto) || '' : '',
+    altaACuenta: num(f.altaACuenta) || '',
+    escenario: escenario,
+    observaciones: texto(f.observaciones),
+  };
+  agregarFilas_(HOJAS.legajos, COLUMNAS.legajos, [leg]);
+  const ult = ultimoPeriodo(d.novedades);
+  const per = periodoDe(ingreso);
+  const filas = [];
+  if (!escenario && ult && per <= ult) {
+    for (let m = per; m <= ult; m = sumarMeses(m, 1)) {
+      filas.push({ periodo: m, legajo: id, nombre: nombre, basico: leg.altaBasico, netoPactado: leg.altaNeto, aCuenta: leg.altaACuenta });
+    }
+    agregarFilas_(HOJAS.novedades, COLUMNAS.novedades, filas);
+  }
+  const res = actualizar_();
+  let msg = 'Alta cargada: ' + id + ' — ' + nombre + (escenario ? ', solo en el escenario "' + escenario + '"' : '') + '.';
+  if (filas.length) msg += ' Se agregó a Novedades de ' + per + (per < ult ? ' a ' + ult : '') + '.';
+  else if (!escenario) msg += ' Entra en la proyección desde ' + per + ' y en Novedades cuando prepares ese mes.';
+  return { mensaje: msg, detalle: res.mensaje, avisos: res.avisos };
+}
+
+/** Estimación de la liquidación final sin guardar nada (para mostrar antes de confirmar). */
+function simularBajaFormulario(f) {
+  return simularBaja(leerTodo_(), f.legajo, f.fecha, f.motivo, f.vacTomadas);
+}
+
+/** Registra la baja en Legajos y saca de Novedades los meses posteriores a la baja. */
+function guardarBaja(f) {
+  const d = prepararDatos(leerTodo_());
+  const leg = d.legajos.get(texto(f.legajo));
+  const baja = fecha(f.fecha);
+  if (!leg) throw new Error('Elegí a la persona.');
+  if (!baja) throw new Error('Falta la fecha de baja.');
+  if (leg.ingreso && diaNumero(baja) < diaNumero(leg.ingreso)) throw new Error('La fecha de baja es anterior al ingreso.');
+  actualizarFila_(HOJAS.legajos, COLUMNAS.legajos, 'legajo', leg.legajo, {
+    estado: 'Baja', baja: f.fecha, motivoBaja: normalizarMotivo(f.motivo) || MOTIVO_RENUNCIA, vacTomadas: num(f.vacTomadas) || '',
+  });
+  const per = periodoDe(baja);
+  const borradas = borrarNovedades_(n => n.legajo === leg.legajo && periodo(n.periodo) > per);
+  const res = actualizar_();
+  let msg = 'Baja registrada: ' + leg.nombre + ' el ' + fechaCorta(baja) + '. La liquidación final estimada está en la hoja Liquidaciones finales.';
+  if (borradas) msg += ' Se sacaron ' + borradas + ' filas de Novedades posteriores a la baja.';
+  return { mensaje: msg, detalle: res.mensaje, avisos: res.avisos };
+}
+
+/**
+ * Agrega un aumento a "Aumentos previstos". Si rige desde un mes ya cargado (y es del
+ * escenario principal), además actualiza esos meses en Novedades.
+ */
+function guardarAumento(f) {
+  const d = prepararDatos(leerTodo_());
+  const legajo = texto(f.legajo);
+  const leg = legajo ? d.legajos.get(legajo) : null;
+  if (legajo && !leg) throw new Error('No encuentro el legajo ' + legajo + '.');
+  const ult = ultimoPeriodo(d.novedades);
+  const escenario = normalizarEscenario(f.escenario);
+  let desde = periodo(f.desde);
+  if (!desde) throw new Error('Falta desde qué mes rige.');
+  const a = {
+    desde: desde,
+    convenio: leg ? leg.convenio : normalizarConvenio(f.convenio),
+    legajo: legajo,
+    tipo: AUMENTO_SUELDO,
+    porcentaje: num(f.porcentaje) / 100,
+    monto: num(f.monto),
+    escenario: escenario,
+    observaciones: texto(f.observaciones),
+  };
+  if (!a.convenio) throw new Error('Elegí una persona o un convenio.');
+  if (!a.porcentaje && !a.monto) throw new Error('Cargá un porcentaje o un monto.');
+  const principal = aplicaEscenario(escenario, ESCENARIO_BASE);
+  let msg = 'Aumento cargado' + (leg ? ' para ' + leg.nombre : ' para todo ' + a.convenio) + ' desde ' + desde + '.';
+  if (ult && desde <= ult) {
+    if (principal) {
+      const cambios = cambiosPorAumento(d, a);
+      actualizarNovedades_(cambios);
+      const meses = new Set(cambios.map(c => c.periodo)).size;
+      a.observaciones = (a.observaciones ? a.observaciones + ' ' : '') + 'Aplicado a Novedades.';
+      msg += ' Se aplicó a ' + meses + (meses === 1 ? ' mes' : ' meses') + ' ya cargados en Novedades.';
+    } else {
+      a.desde = sumarMeses(ult, 1);
+      msg = 'Aumento cargado en el escenario "' + escenario + '" desde ' + a.desde + ' (el primer mes proyectado).';
+    }
+  }
+  agregarFilas_(HOJAS.aumentos, COLUMNAS.aumentos, [a]);
+  const res = actualizar_();
+  return { mensaje: msg, detalle: res.mensaje, avisos: res.avisos };
+}
+
 // --- Lectura ---------------------------------------------------------------------------
 
 function leerTodo_() {
@@ -366,10 +536,77 @@ function normalizar_(v) {
 function buscarLiquidacion_(d, per, leg) {
   const reales = liquidarReales(d);
   return reales.find(r => r.periodo === per && r.legajo === leg) ||
-    proyectar(d, reales).find(r => r.periodo === per && r.legajo === leg);
+    proyectar(d, reales, ESCENARIO_BASE).find(r => r.periodo === per && r.legajo === leg);
 }
 
 // --- Escritura -------------------------------------------------------------------------
+
+/** Agrega filas al final de una hoja de entrada, ubicando cada valor por su encabezado. */
+function agregarFilas_(nombre, columnas, objetos) {
+  if (!objetos.length) return;
+  const sh = hoja_(nombre);
+  const enc = encabezado_(sh);
+  const salida = objetos.map(o => {
+    const fila = new Array(enc.length).fill('');
+    columnas.forEach(c => {
+      const i = enc.indexOf(c[1].toLowerCase());
+      if (i >= 0 && o[c[0]] !== undefined && o[c[0]] !== null) fila[i] = o[c[0]];
+    });
+    return fila;
+  });
+  const desde = sh.getLastRow() + 1;
+  columnas.forEach(c => {
+    const i = enc.indexOf(c[1].toLowerCase());
+    if (i >= 0 && c[2] === 'periodo') sh.getRange(desde, i + 1, salida.length, 1).setNumberFormat('@');
+  });
+  sh.getRange(desde, 1, salida.length, enc.length).setValues(salida);
+}
+
+/** Cambia algunos campos de la fila cuya columna `clave` vale `valor`. */
+function actualizarFila_(nombre, columnas, clave, valor, campos) {
+  const sh = hoja_(nombre);
+  const datos = sh.getDataRange().getValues();
+  const enc = datos[0].map(h => String(h).trim().toLowerCase());
+  const col = k => enc.indexOf(columnas.find(c => c[0] === k)[1].toLowerCase());
+  const fila = datos.findIndex((f, i) => i > 0 && texto(f[col(clave)]) === valor);
+  if (fila < 0) throw new Error('No encuentro "' + valor + '" en la hoja ' + nombre + '.');
+  for (const k of Object.keys(campos)) {
+    const c = col(k);
+    if (c < 0) throw new Error('En la hoja ' + nombre + ' falta la columna de ' + k + '.');
+    sh.getRange(fila + 1, c + 1).setValue(campos[k]);
+  }
+}
+
+/** Escribe en Novedades los cambios [{ periodo, legajo, campo, valor }]. */
+function actualizarNovedades_(cambios) {
+  if (!cambios.length) return;
+  const sh = hoja_(HOJAS.novedades);
+  const datos = sh.getDataRange().getValues();
+  const enc = datos[0].map(h => String(h).trim().toLowerCase());
+  const col = k => enc.indexOf(COLUMNAS.novedades.find(c => c[0] === k)[1].toLowerCase());
+  const filas = new Map();
+  datos.forEach((f, i) => { if (i > 0) filas.set(periodo(normalizar_(f[col('periodo')])) + '|' + texto(f[col('legajo')]), i + 1); });
+  for (const c of cambios) {
+    const r = filas.get(c.periodo + '|' + c.legajo);
+    if (r) sh.getRange(r, col(c.campo) + 1).setValue(c.valor);
+  }
+}
+
+/** Borra de Novedades las filas que cumplen la condición. Devuelve cuántas borró. */
+function borrarNovedades_(condicion) {
+  const sh = hoja_(HOJAS.novedades);
+  const datos = sh.getDataRange().getValues();
+  const enc = datos[0].map(h => String(h).trim().toLowerCase());
+  const iPer = enc.indexOf('período'), iLeg = enc.indexOf('legajo');
+  let borradas = 0;
+  for (let i = datos.length - 1; i >= 1; i--) {
+    if (condicion({ periodo: normalizar_(datos[i][iPer]), legajo: texto(datos[i][iLeg]) })) {
+      sh.deleteRow(i + 1);
+      borradas++;
+    }
+  }
+  return borradas;
+}
 
 /** Reemplaza todo el contenido de una hoja de salida por la tabla. */
 function escribirTabla_(nombre, tabla) {
